@@ -9,5 +9,4 @@ Data from the following sources:
 3. [2019](https://gpdp.nic.in/PPC2019/summaryAnalysisReport.html)
 4. [2018](https://gpdp.nic.in/PPC2018/summaryAnalysisReport.html)
 
-Final format:
-year, gp, block, district, state, gp level report table columns
+Final format: year, gp, block, district, state, gp level report table columns
