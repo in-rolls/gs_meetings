@@ -20,6 +20,12 @@ that comparison because it is not populated as a GP count at these levels.
 No GP response was empty. These checks validate extraction for this scope, not
 historical completeness or the accuracy of the agency's attendance reports.
 
+Five source rows have subgroup attendance above total attendance: one in `PPC`
+and four in `PPC2018`. These are preserved and flagged in `manifest.json`. Five
+`PPC2019` rows report zero total attendance. All other editions have no zero-total
+rows in this pilot. Source excerpts for the five inconsistencies are retained in
+[historical_anomalies.json](tests/fixtures/historical_anomalies.json).
+
 The report service returned 36 state/UT rows in each edition. That establishes
 the national summary's available rows, not a complete nationwide GP frame.
 The five editions required 45 requests: three hierarchy requests and six GP

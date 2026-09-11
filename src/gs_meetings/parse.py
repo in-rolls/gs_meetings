@@ -58,6 +58,31 @@ def parse_rows(body: str, unit: dict, fetched_at: str) -> list[dict]:
     ]
 
 
+def attendance_issues(rows: list[dict]) -> list[dict]:
+    """Flag subgroup counts above total attendance without changing source values."""
+    issues = []
+    for row in rows:
+        total = row["people_present"]
+        if total is None:
+            continue
+        exceeding = {
+            field: row[field]
+            for field in ["women_present", "sc_present", "st_present", "shg_present"]
+            if row[field] is not None and row[field] > total
+        }
+        if exceeding:
+            issues.append(
+                {
+                    "source_url": row["source_url"],
+                    "gp_code": row["gp_code"],
+                    "gp_name": row["gp_name"],
+                    "people_present": total,
+                    "subgroups_exceeding_total": exceeding,
+                }
+            )
+    return issues
+
+
 def convert(root: Path) -> dict:
     """Write records, schema, checksums and explicit coverage/reconciliation."""
     units = pq.read_table(root / "frame.parquet").to_pylist()
@@ -122,6 +147,7 @@ def convert(root: Path) -> dict:
             entry["url"] for entry in reconciliation if entry["gp_rows"] == 0
         ],
         "reconciliation": reconciliation,
+        "attendance_issues": attendance_issues(rows),
         "null_counts": {
             field: sum(row[field] is None for row in rows) for field in METRICS.values()
         },

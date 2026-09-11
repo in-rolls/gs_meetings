@@ -20,7 +20,7 @@ or Dataverse deposit has been published. Output stays under `data/`.
 | `records.parquet` | One row per GP/TLB returned by each parent report |
 | `frame-manifest.json` | Selected geography, number of requests and state summary |
 | `fetch-manifest.json` | Successful and failed requests from the fetch invocation |
-| `manifest.json` | Row count, missing/empty units, null counts and parent/child differences |
+| `manifest.json` | Row count, missing/empty units, null counts, attendance inconsistencies and parent/child differences |
 | `SCHEMA.json`, `CHECKSUMS` | Output types and SHA-256 checksums |
 
 See [PILOT.md](PILOT.md) for the verified sample and source comparison.
@@ -54,6 +54,9 @@ district panchayats should not automatically be treated as administrative distri
 
 - Counts are administrative reports entered by field agencies. They do not establish
   independently observed attendance, unique participants or a census of meetings.
+- Historical pilot responses include five rows where a subgroup exceeds total
+  attendance. `manifest.json` identifies each in `attendance_issues`; values are
+  preserved, and parsing logs a warning. These source issues do not change the exit code.
 - Attendance categories overlap: a participant may be a woman, SC and an SHG member.
   Do not add these columns to estimate total attendance.
 - The current page's metadata mentions 2022 and its footer says February 2024.

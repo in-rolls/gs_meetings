@@ -11,7 +11,7 @@ import requests
 from gs_meetings.cli import main
 from gs_meetings.fetch import Client, read_capture
 from gs_meetings.frame import FRAME_SCHEMA, enumerate_units, fetch_units, write_parquet
-from gs_meetings.parse import SCHEMA, convert, parse_rows
+from gs_meetings.parse import SCHEMA, attendance_issues, convert, parse_rows
 from gs_meetings.source import METRICS, endpoint, validate_rows
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -241,3 +241,31 @@ def test_cli_validation_and_empty_parse(tmp_path):
 
 def test_metrics_cover_fixture():
     assert set(fixture("gp")[0]) - set(METRICS) == {"code", "name", "level", "tlb"}
+
+
+@pytest.mark.parametrize("sample", fixture("historical_anomalies"))
+def test_real_attendance_inconsistency_is_flagged_without_rewriting(sample):
+    rows = parse_rows(
+        json.dumps([sample["row"]]),
+        {"url": sample["source_url"], "edition": sample["edition"]},
+        sample["fetched_at"],
+    )
+    issues = attendance_issues(rows)
+    assert len(issues) == 1
+    assert issues[0]["gp_code"] == str(sample["row"]["code"])
+    assert all(
+        value > sample["row"]["peoplePresent"]
+        for value in issues[0]["subgroups_exceeding_total"].values()
+    )
+    assert json.loads(rows[0]["raw_row"]) == sample["row"]
+
+
+def test_missing_attendance_is_not_zero():
+    row = {**fixture("gp")[0], "peoplePresent": None}
+    parsed = parse_rows(json.dumps([row]), {"url": "source"}, "capture")
+    assert attendance_issues(parsed) == []
+    assert attendance_issues(
+        parse_rows(
+            json.dumps([{**row, "peoplePresent": 0}]), {"url": "source"}, "capture"
+        )
+    )

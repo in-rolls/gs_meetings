@@ -1,0 +1,122 @@
+[
+  {
+    "edition": "PPC",
+    "source_url": "https://gpdp.nic.in/PPC/gpSummaryAnalysisReport.html?stateId=6&code=1033",
+    "fetched_at": "2026-09-11T19:18:47.327467+00:00",
+    "row": {
+      "code": 28023,
+      "name": "KHANPUR RAJPUTAN",
+      "level": "V",
+      "totalGp": 0,
+      "feedbackSubmitted": 1,
+      "peoplePresent": 10,
+      "scPresent": 10,
+      "stPresent": 0,
+      "shgPresent": 12,
+      "shgPresentation": 0,
+      "womenPresent": 5,
+      "missionAntyodayaPresentation": 1,
+      "gpdpFundUtilized": 1,
+      "discussionOnResource": 1,
+      "discussionOnGaps": 1,
+      "resolutionPassedRecorded": 1,
+      "tlb": false
+    }
+  },
+  {
+    "edition": "PPC2018",
+    "source_url": "https://gpdp.nic.in/PPC2018/gpSummaryAnalysisReport.html?stateId=6&code=1031",
+    "fetched_at": "2026-09-11T19:19:01.540853+00:00",
+    "row": {
+      "code": 27898,
+      "name": "LIHARSA",
+      "level": "V",
+      "totalGp": 0,
+      "feedbackSubmitted": 1,
+      "peoplePresent": 31,
+      "scPresent": 35,
+      "stPresent": 0,
+      "shgPresent": 1,
+      "shgPresentation": 1,
+      "womenPresent": 14,
+      "missionAntyodayaPresentation": 1,
+      "gpdpFundUtilized": 0,
+      "discussionOnResource": 1,
+      "discussionOnGaps": 0,
+      "resolutionPassedRecorded": 1,
+      "tlb": false
+    }
+  },
+  {
+    "edition": "PPC2018",
+    "source_url": "https://gpdp.nic.in/PPC2018/gpSummaryAnalysisReport.html?stateId=6&code=1032",
+    "fetched_at": "2026-09-11T19:19:01.868061+00:00",
+    "row": {
+      "code": 27960,
+      "name": "SEHLA",
+      "level": "V",
+      "totalGp": 0,
+      "feedbackSubmitted": 1,
+      "peoplePresent": 30,
+      "scPresent": 25,
+      "stPresent": 0,
+      "shgPresent": 0,
+      "shgPresentation": 0,
+      "womenPresent": 53,
+      "missionAntyodayaPresentation": 1,
+      "gpdpFundUtilized": 0,
+      "discussionOnResource": 1,
+      "discussionOnGaps": 0,
+      "resolutionPassedRecorded": 1,
+      "tlb": false
+    }
+  },
+  {
+    "edition": "PPC2018",
+    "source_url": "https://gpdp.nic.in/PPC2018/gpSummaryAnalysisReport.html?stateId=6&code=1033",
+    "fetched_at": "2026-09-11T19:19:02.189874+00:00",
+    "row": {
+      "code": 27982,
+      "name": "BAKHTUA",
+      "level": "V",
+      "totalGp": 0,
+      "feedbackSubmitted": 1,
+      "peoplePresent": 45,
+      "scPresent": 35,
+      "stPresent": 42,
+      "shgPresent": 45,
+      "shgPresentation": 1,
+      "womenPresent": 55,
+      "missionAntyodayaPresentation": 1,
+      "gpdpFundUtilized": 0,
+      "discussionOnResource": 1,
+      "discussionOnGaps": 0,
+      "resolutionPassedRecorded": 1,
+      "tlb": false
+    }
+  },
+  {
+    "edition": "PPC2018",
+    "source_url": "https://gpdp.nic.in/PPC2018/gpSummaryAnalysisReport.html?stateId=6&code=1035",
+    "fetched_at": "2026-09-11T19:19:02.896886+00:00",
+    "row": {
+      "code": 28164,
+      "name": "NEKNAWAN",
+      "level": "V",
+      "totalGp": 0,
+      "feedbackSubmitted": 1,
+      "peoplePresent": 32,
+      "scPresent": 23,
+      "stPresent": 2,
+      "shgPresent": 0,
+      "shgPresentation": 0,
+      "womenPresent": 43,
+      "missionAntyodayaPresentation": 1,
+      "gpdpFundUtilized": 0,
+      "discussionOnResource": 1,
+      "discussionOnGaps": 0,
+      "resolutionPassedRecorded": 1,
+      "tlb": false
+    }
+  }
+]
