@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "code": 27783,
+    "name": "Adho Majra",
+    "gram_sabha_date": "22-11-2024",
+    "meeting_type": "S"
+  },
+  {
+    "id": 2,
+    "code": 27784,
+    "name": "Ahema",
+    "gram_sabha_date": "19-11-2024",
+    "meeting_type": "S"
+  }
+]

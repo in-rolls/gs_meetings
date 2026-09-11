@@ -26,13 +26,16 @@ def atomic_json(path: Path, value: object) -> None:
     part.replace(path)
 
 
-def read_capture(path: Path) -> dict | None:
+def read_capture(path: Path, validator=validate_rows, *, parser=None) -> dict | None:
     """Return a complete successful capture; interrupted writes are retried."""
     try:
         with gzip.open(path, "rt", encoding="utf-8") as stream:
             record = json.loads(stream.read())
         if record.get("ok") is True and record.get("done") is True:
-            validate_rows(json.loads(record["body"]))
+            if parser is None:
+                validator(json.loads(record["body"]))
+            else:
+                record["parsed_rows"] = parser(record["body"])
             return record
     except (
         OSError,
@@ -50,10 +53,20 @@ def read_capture(path: Path) -> dict | None:
 class Client:
     """One sequential HTTP session with bounded, configurable retries."""
 
-    def __init__(self, root: Path, edition: str, retries: int = 4):
+    def __init__(
+        self,
+        root: Path,
+        edition: str,
+        retries: int = 4,
+        validator=validate_rows,
+        *,
+        parser=None,
+    ):
         """Set up TLS-verified requests and a directory for this snapshot."""
         self.root = root
         self.edition = edition
+        self.validator = validator
+        self.parser = parser
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -83,9 +96,11 @@ class Client:
         """Keep response text and provenance even when validation fails."""
         key = hashlib.sha256(url.encode()).hexdigest()
         path = self.root / "raw" / self.edition / f"{key}.jsonl.gz"
-        cached = read_capture(path)
+        cached = read_capture(path, self.validator, parser=self.parser)
         if cached is not None and cached["url"] == url:
-            return json.loads(cached["body"]), path
+            return (
+                cached["parsed_rows"] if self.parser else json.loads(cached["body"])
+            ), path
         record = {
             "url": url,
             "edition": self.edition,
@@ -100,7 +115,13 @@ class Client:
                 status=response.status_code, body=response.text, final_url=response.url
             )
             response.raise_for_status()
-            rows = validate_rows(response.json())
+            if not response.text.strip():
+                raise ValueError("Empty response body")
+            rows = (
+                self.parser(response.text)
+                if self.parser
+                else self.validator(response.json())
+            )
             record.update(ok=True, done=True)
         except (requests.RequestException, ValueError) as exc:
             record["reason"] = str(exc)

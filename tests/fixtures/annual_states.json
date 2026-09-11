@@ -1,0 +1,22 @@
+[
+  {
+    "stateCode": 35,
+    "stateName": "ANDAMAN AND NICOBAR ISLANDS",
+    "districtCount": 0,
+    "blockCount": 0,
+    "gpCount": 208,
+    "total": 208,
+    "level": "D",
+    "levelCount": null
+  },
+  {
+    "stateCode": 28,
+    "stateName": "ANDHRA PRADESH",
+    "districtCount": 9,
+    "blockCount": 683,
+    "gpCount": 12649,
+    "total": 13341,
+    "level": "D",
+    "levelCount": null
+  }
+]

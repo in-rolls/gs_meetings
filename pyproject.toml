@@ -9,7 +9,12 @@ license-files = ["LICENSE"]
 authors = [{name = "Gaurav Sood", email = "contact@gsood.com"}]
 keywords = ["India", "panchayat", "Gram Sabha", "participation"]
 classifiers = ["Intended Audience :: Science/Research", "Programming Language :: Python :: 3", "Topic :: Scientific/Engineering"]
-dependencies = ["requests>=2.32", "urllib3>=2.7", "pyarrow>=21"]
+dependencies = [
+    "requests>=2.32",
+    "urllib3>=2.7",
+    "pyarrow>=21",
+    "beautifulsoup4>=4.13",
+]
 
 [project.urls]
 Repository = "https://github.com/in-rolls/gs_meetings"

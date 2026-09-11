@@ -1,0 +1,7 @@
+[
+  {"edition":"PPC2018","homepage_campaign_start":"2018-10-02","homepage_campaign_end":"2018-12-31","homepage_plan_year":"2019-2020","source_url":"https://gpdp.nic.in/PPC2018/","scope_note":"Dates are the campaign window stated on the homepage, not verified bounds on submitted records."},
+  {"edition":"PPC2019","homepage_campaign_start":"2020-05-01","homepage_campaign_end":"2020-06-15","homepage_plan_year":"2020-2021","source_url":"https://gpdp.nic.in/PPC2019/","scope_note":"The archive named PPC2019 describes a 2020 revision campaign. Do not assign every summary to calendar year 2019 or assume the homepage window bounds the aggregate."},
+  {"edition":"PPC2020","homepage_campaign_start":"2020-10-02","homepage_campaign_end":"2021-01-31","homepage_plan_year":"2021-2022","source_url":"https://gpdp.nic.in/PPC2020/","scope_note":"Campaign dates and target plan year differ; neither is the collection date."},
+  {"edition":"PPC","homepage_campaign_start":"2021-10-02","homepage_campaign_end":"2022-01-31","homepage_plan_year":"2022-2023","source_url":"https://gpdp.nic.in/PPC/","scope_note":"Archive homepage identifies the 2021-2022 campaign and the target 2022-2023 plan year."},
+  {"edition":"current","homepage_campaign_start":null,"homepage_campaign_end":null,"homepage_plan_year":"2026-2027","source_url":"https://gpdp.nic.in/","scope_note":"Homepage currently labels plan year 2026-2027, but the summary service has no fiscal-year parameter. Its aggregation period remains unverified. Separate dated-report selectors expose 2022-2023 through 2025-2026."}
+]

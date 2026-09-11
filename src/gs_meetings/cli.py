@@ -7,9 +7,16 @@ from pathlib import Path
 
 import requests
 
+from gs_meetings.collect import collect
+from gs_meetings.export import export_national
+from gs_meetings.feedback_collect import collect_feedback
+from gs_meetings.feedback_export import export_feedback
 from gs_meetings.fetch import Client
 from gs_meetings.frame import enumerate_units, fetch_units
+from gs_meetings.meeting_export import export_meetings
+from gs_meetings.meetings import collect_meetings
 from gs_meetings.parse import convert
+from gs_meetings.pipeline import collect_all
 from gs_meetings.source import EDITIONS
 
 LOG = logging.getLogger(__name__)
@@ -27,6 +34,35 @@ def main(argv: list[str] | None = None) -> int:
     """Run a bounded collection stage and report failures to the caller."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    command = commands.add_parser("collect-all")
+    command.add_argument("--root", type=Path, default=Path("data"))
+    command.add_argument("--workers", type=positive, default=16)
+    command.add_argument("--retries", type=positive, default=2)
+    command = commands.add_parser("collect")
+    command.add_argument("--root", type=Path, default=Path("data/national"))
+    command.add_argument("--workers", type=positive, default=16)
+    command.add_argument("--retries", type=positive, default=8)
+    command.add_argument("--max-requests", type=positive)
+    command = commands.add_parser("export")
+    command.add_argument("--root", type=Path, default=Path("data/national"))
+    command.add_argument("--allow-source-errors", action="store_true")
+    command = commands.add_parser("export-meetings")
+    command.add_argument("--root", type=Path, default=Path("data/meetings"))
+    command.add_argument("--allow-source-errors", action="store_true")
+    command = commands.add_parser("export-feedback")
+    command.add_argument("--root", type=Path, default=Path("data/feedback"))
+    command.add_argument("--allow-source-errors", action="store_true")
+    command = commands.add_parser("collect-meetings")
+    command.add_argument("--root", type=Path, default=Path("data/meetings"))
+    command.add_argument("--workers", type=positive, default=4)
+    command.add_argument("--retries", type=positive, default=2)
+    command.add_argument("--max-requests", type=positive)
+    command = commands.add_parser("collect-feedback")
+    command.add_argument("--root", type=Path, default=Path("data/feedback"))
+    command.add_argument("--meetings-root", type=Path, default=Path("data/meetings"))
+    command.add_argument("--workers", type=positive, default=4)
+    command.add_argument("--retries", type=positive, default=2)
+    command.add_argument("--max-requests", type=positive)
     for name in ["list", "fetch", "parse"]:
         command = commands.add_parser(name)
         command.add_argument("--root", type=Path, default=Path("data/current"))
@@ -41,6 +77,61 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
+        if args.command == "collect-all":
+            report = collect_all(args.root, args.workers, args.retries)
+            return int(
+                any(
+                    not report[name]["all_discovered_requests_succeeded"]
+                    for name in ["summaries", "meetings", "feedback"]
+                )
+            )
+        if args.command == "export-feedback":
+            LOG.info(
+                "%s",
+                json.dumps(
+                    export_feedback(
+                        args.root, allow_source_errors=args.allow_source_errors
+                    )
+                ),
+            )
+            return 0
+        if args.command == "collect-feedback":
+            report = collect_feedback(
+                args.root,
+                args.meetings_root,
+                args.workers,
+                args.retries,
+                args.max_requests,
+            )
+            return int(any(group["status"] != "done" for group in report["groups"]))
+        if args.command == "export-meetings":
+            LOG.info(
+                "%s",
+                json.dumps(
+                    export_meetings(
+                        args.root, allow_source_errors=args.allow_source_errors
+                    )
+                ),
+            )
+            return 0
+        if args.command == "collect-meetings":
+            report = collect_meetings(
+                args.root, args.workers, args.retries, args.max_requests
+            )
+            return int(any(group["status"] != "done" for group in report["groups"]))
+        if args.command == "export":
+            LOG.info(
+                "%s",
+                json.dumps(
+                    export_national(
+                        args.root, allow_source_errors=args.allow_source_errors
+                    )
+                ),
+            )
+            return 0
+        if args.command == "collect":
+            report = collect(args.root, args.workers, args.retries, args.max_requests)
+            return int(any(group["status"] != "done" for group in report["groups"]))
         if args.command == "parse":
             report = convert(args.root)
             if report["attendance_issues"]:
