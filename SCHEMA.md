@@ -113,6 +113,8 @@ nullable attendance counts, and nullable yes/no indicators for presentations,
 discussions, quorum, Mahila Sabha and Bal Sabha. These indicators describe one
 report, whereas similarly named fields in the summary data are aggregate counts.
 Missing fields remain null; an absent checkbox or answer is not a reported no.
+For HTML answers, whitespace is collapsed and blank text becomes null. Comma
+separators are removed before parsing attendance counts; the raw HTML is retained.
 
 `feedback_answers.parquet` preserves every labelled question and its text or
 boolean response. Its key is (`source_url`, `answer_ordinal`). Question wording

@@ -10,18 +10,19 @@ and coverage limits below.
 
 ## Data
 
-The current summary snapshot contains **1,230,342 GP-by-edition records** from the
+The summary snapshot captured on 2026-09-11 contains **1,242,582 GP-by-edition records** from the
 live report and four archives. It includes explicit source coverage gaps.
-The package also collects dated meeting listings and individual facilitator
-reports. Output stays under `data/`; no Dataverse deposit has been published.
+The dated collection contains **2,412,779 listing rows**. These are source entries,
+not a deduplicated count of meetings. Individual facilitator reports are still
+downloading. Output stays under `data/`; no Dataverse deposit has been published.
 
 | Summary edition | GP/TLB records |
 |---|---:|
 | `PPC2018` | 217,338 |
-| `PPC2019` | 240,301 |
-| `PPC2020` | 258,529 |
-| `PPC` | 257,190 |
-| `current` | 256,984 |
+| `PPC2019` | 241,634 |
+| `PPC2020` | 262,131 |
+| `PPC` | 261,798 |
+| `current` | 259,681 |
 
 | File | Contents |
 |---|---|
@@ -114,9 +115,9 @@ archive lists a meeting on 2021-12-01.
 
 - Counts are administrative reports entered by field agencies. They do not establish
   independently observed attendance, unique participants or a census of meetings.
-- Historical pilot responses include five rows where a subgroup exceeds total
-  attendance. `manifest.json` identifies each in `attendance_issues`; values are
-  preserved, and parsing logs a warning. These source issues do not change the exit code.
+- Some reports have a subgroup count larger than total attendance. The summary
+  export identifies these in `attendance_issues.json`; values are preserved for
+  investigation. Facilitator exports also flag attendance inconsistencies.
 - Attendance categories overlap: a participant may be a woman, SC and an SHG member.
   Do not add these columns to estimate total attendance.
 - The current homepage names plan year 2026–2027, while the summary page contains
