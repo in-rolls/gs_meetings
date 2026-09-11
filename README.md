@@ -12,7 +12,7 @@ and coverage limits below.
 
 The summary snapshot captured on 2026-09-11 contains **1,242,582 GP-by-edition records** from the
 live report and four archives. It includes explicit source coverage gaps.
-The dated collection contains **2,412,779 listing rows**. These are source entries,
+The dated collection contains **2,424,299 listing rows**. These are source entries,
 not a deduplicated count of meetings. Individual facilitator reports are still
 downloading. Output stays under `data/`; no Dataverse deposit has been published.
 
@@ -110,6 +110,24 @@ The four archives also provide meeting dates. Actual meeting dates are stored
 separately from the requested financial year and the UTC download timestamp.
 For example, Ambala-I's 2024–2025 report lists Adho Majra on 2024-11-22; its PPC
 archive lists a meeting on 2021-12-01.
+
+The national download contains these observed date ranges:
+
+| Report selection | Listing rows | Earliest date | Latest date |
+|---|---:|---|---|
+| `PPC2018` | 244,020 | 2018-10-02 | 2019-03-15 |
+| `PPC2019` | 409,641 | 2019-10-02 | 2020-06-15 |
+| `PPC2020` | 286,104 | 2020-10-02 | 2021-05-31 |
+| `PPC` | 297,316 | 2021-10-02 | 2022-03-27 |
+| Current, 2022–2023 | 276,084 | 2022-10-02 | 2023-09-29 |
+| Current, 2023–2024 | 268,973 | 2023-06-13 | 2024-10-10 |
+| Current, 2024–2025 | 296,041 | 2024-10-01 | 2025-07-30 |
+| Current, 2025–2026 | 346,120 | 2024-08-14 | 2026-09-11 |
+
+**149,726 rows fall outside April–March of the requested financial year.** Their
+returned dates are preserved and flagged. The report selector is not a reliable
+substitute for the actual date; these ranges also do not establish continuous
+coverage between the earliest and latest observations.
 
 ## Coverage and interpretation
 
