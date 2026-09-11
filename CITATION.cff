@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "Please cite this software and the official report URL and capture date."
+type: software
+title: "Gram Sabha participation reports"
+authors:
+  - family-names: Sood
+    given-names: Gaurav
+    email: contact@gsood.com
+repository-code: "https://github.com/in-rolls/gs_meetings"
+url: "https://github.com/in-rolls/gs_meetings"
+license: MIT
+keywords:
+  - India
+  - Gram Sabha
+  - panchayat
+  - participation
