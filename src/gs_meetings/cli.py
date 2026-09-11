@@ -43,6 +43,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "parse":
             report = convert(args.root)
+            if report["attendance_issues"]:
+                LOG.warning(
+                    "Rows with attendance inconsistencies: %s",
+                    len(report["attendance_issues"]),
+                )
             LOG.info(
                 "rows=%s missing_units=%s empty_units=%s",
                 report["rows"],
