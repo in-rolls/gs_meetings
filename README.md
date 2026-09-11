@@ -10,20 +10,25 @@ and coverage limits below.
 
 ## Data
 
-This is a collection package with a small validation pilot. No national dataset
-or Dataverse deposit has been published. Output stays under `data/`.
+The collector covers the current report and four archived editions. National
+collection is not yet complete, and no Dataverse deposit has been published.
+Output stays under `data/`.
 
 | File | Contents |
 |---|---|
-| `frame.parquet` | One row per GP-report request in the selected geographic scope |
+| `collection.sqlite` | Resumable queue of national summary requests and their geographic context |
 | `raw/<edition>/*.jsonl.gz` | Original JSON response text, URL, UTC timestamp and success/failure status |
-| `records.parquet` | One row per GP/TLB returned by each parent report |
-| `frame-manifest.json` | Selected geography, number of requests and state summary |
-| `fetch-manifest.json` | Successful and failed requests from the fetch invocation |
-| `manifest.json` | Row count, missing/empty units, null counts, attendance inconsistencies and parent/child differences |
-| `SCHEMA.json`, `CHECKSUMS` | Output types and SHA-256 checksums |
+| `tables/gp_reports.parquet` | One row per GP/TLB returned by each parent report and edition |
+| `tables/report_editions.parquet` | Campaign dates and target plan years stated on each edition's homepage |
+| `tables/request_coverage.parquet` | Every discovered request, including successful empty responses |
+| `tables/hierarchy_summaries.parquet` | Original state, district and block summary rows with geographic context |
+| `tables/column_profiles.parquet` | Missingness, zeros and ranges by edition, state and count field |
+| `tables/reconciliation.parquet` | GP sums compared with the immediate parent's reported totals |
+| `tables/attendance_issues.json`, `tables/ambiguous_gp_keys.json` | Attendance inconsistencies and GP codes appearing under multiple parents |
+| `tables/manifest.json`, `tables/SCHEMA.json`, `tables/CHECKSUMS` | Coverage, row counts, output types and SHA-256 checksums |
 
-See [PILOT.md](PILOT.md) for the verified sample and source comparison.
+See [SCHEMA.md](SCHEMA.md) for units, keys and join rules, and
+[PILOT.md](PILOT.md) for the verified Ambala sample and source comparison.
 
 ## Columns
 
@@ -44,11 +49,37 @@ See [PILOT.md](PILOT.md) for the verified sample and source comparison.
 | `source_level`, `source_tlb` | Unmodified portal hierarchy/category fields |
 | `source_url`, `fetched_at` | Request URL and UTC capture timestamp |
 | `raw_row` | Original row fields serialized as JSON for reprocessing |
+| `observation_id` | SHA-256 of the report URL and GP code; identifies a row within a snapshot |
 
 Codes are stored as strings and counts as nullable 64-bit integers. Missing values
-remain null, separately from zero. The record key uses edition, the full parent
-hierarchy and GP code. Codes have not yet been validated against a dated LGD release;
+remain null, separately from zero. The record key uses `edition`, `source_url`
+and `gp_code`. Codes have not yet been validated against a dated LGD release;
 district panchayats should not automatically be treated as administrative districts.
+
+## Time coverage
+
+Campaign dates, target plan years and download timestamps describe different things.
+The summary responses have no meeting-date field or year parameter. The homepage
+labels below are retained as metadata; they do not establish the period over which
+the reported counts accumulated.
+
+| Edition | Campaign window on homepage | Target plan year |
+|---|---|---|
+| `PPC2018` | 2018-10-02 to 2018-12-31 | 2019–2020 |
+| `PPC2019` | 2020-05-01 to 2020-06-15 | 2020–2021 |
+| `PPC2020` | 2020-10-02 to 2021-01-31 | 2021–2022 |
+| `PPC` | 2021-10-02 to 2022-01-31 | 2022–2023 |
+| `current` | Unverified | 2026–2027 |
+
+These labels were checked on 2026-09-11. In particular, the archive called
+`PPC2019` describes a campaign in 2020. Do not infer calendar year from its name.
+
+Separate [Gram Sabhas held](https://gpdp.nic.in/gramSabhasHeldReport.html) and
+[facilitator feedback](https://gpdp.nic.in/facilitatorFeedbackReport.html) pages
+offer financial years 2022–2023 through 2025–2026. Their page templates include
+meeting dates. Those responses still need verification and collection; they are
+not included in the summary tables. Actual meeting dates will be stored separately
+from the requested financial year and the UTC download timestamp.
 
 ## Coverage and interpretation
 
@@ -59,9 +90,8 @@ district panchayats should not automatically be treated as administrative distri
   preserved, and parsing logs a warning. These source issues do not change the exit code.
 - Attendance categories overlap: a participant may be a woman, SC and an SHG member.
   Do not add these columns to estimate total attendance.
-- The current page's metadata mentions 2022 and its footer says February 2024.
-  Neither establishes the observation period of the live response. Keep `edition`
-  and capture time until the campaign dates and accumulation rules are verified.
+- The current homepage names plan year 2026–2027, while the summary page contains
+  older dates. Neither establishes the observation period of its live counts.
 - `feedbackSubmitted` is greater than one for some individual GPs. We preserve
   it without relabelling it as either distinct GPs or a verified meeting count.
 - A zero report can reflect no submitted feedback; it is not proof that no meeting
@@ -69,7 +99,7 @@ district panchayats should not automatically be treated as administrative distri
 - Parent and child reports are fetched at different times. Their differences are
   reported explicitly; matching totals alone do not establish full GP coverage.
 - The portal omits state codes 4 and 7 from its displayed state table. Raw state
-  responses retain them. This package never labels a selected district as national data.
+  responses retain them; national traversal follows the displayed hierarchy.
 
 ## How collected
 
@@ -96,8 +126,9 @@ must still be checked separately for each edition.
 
 Each successful response is saved atomically and reused on resume. Failed or damaged
 captures are retried; HTTP errors and HTML error pages never become empty data.
-One session fetches sequentially. Four retries are the pilot default, with exponential
-backoff and server `Retry-After` handling for throttling and temporary server errors.
+National collection uses 16 workers, with one session per thread and edition.
+Eight retries are the national default, with exponential backoff and server
+`Retry-After` handling for throttling and temporary server errors.
 Use `--retries 20` for a collection that should wait through a longer outage.
 TLS verification remains enabled. Use a new output directory for a fresh snapshot:
 resume deliberately retains the first successful response for each URL.
@@ -108,13 +139,29 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync --frozen --group dev
+uv run gs-meetings collect --root data/national
+uv run gs-meetings export --root data/national
+```
+
+`collect` traverses all five editions and checkpoints each completed request in
+SQLite. Repeat it to retry failures or resume an interrupted run. Read
+`collection-progress.json` for counts and unresolved errors. `--workers` controls
+concurrency; `--max-requests` limits new requests in an invocation. Incomplete
+queues produce a nonzero exit code. `export` reads saved responses without network
+access and refuses to export a queue with pending or failed requests. A completed
+queue can still contain empty source responses; those remain explicit coverage gaps.
+
+For a selected state or district:
+
+```sh
 uv run gs-meetings list --state 6 --district 58 --root data/ambala-current
 uv run gs-meetings fetch --root data/ambala-current
 uv run gs-meetings parse --root data/ambala-current
 ```
 
 This enumerates Haryana's Ambala district panchayat, fetches its GP reports and
-creates Parquet. Omit `--district` to enumerate the selected state. `fetch --limit 2`
+creates `frame.parquet` and `records.parquet`, with separate frame/fetch manifests.
+Omit `--district` to enumerate the selected state. `fetch --limit 2`
 limits the invocation to the first two frame units, including already cached units.
 Run without that limit to finish the frame. Each stage is safe to repeat in the same
 directory. A failed request makes `fetch` exit nonzero; incomplete or empty units

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import requests
 
+from gs_meetings.collect import collect
+from gs_meetings.export import export_national
 from gs_meetings.fetch import Client
 from gs_meetings.frame import enumerate_units, fetch_units
 from gs_meetings.parse import convert
@@ -27,6 +29,13 @@ def main(argv: list[str] | None = None) -> int:
     """Run a bounded collection stage and report failures to the caller."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    command = commands.add_parser("collect")
+    command.add_argument("--root", type=Path, default=Path("data/national"))
+    command.add_argument("--workers", type=positive, default=16)
+    command.add_argument("--retries", type=positive, default=8)
+    command.add_argument("--max-requests", type=positive)
+    command = commands.add_parser("export")
+    command.add_argument("--root", type=Path, default=Path("data/national"))
     for name in ["list", "fetch", "parse"]:
         command = commands.add_parser(name)
         command.add_argument("--root", type=Path, default=Path("data/current"))
@@ -41,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
+        if args.command == "export":
+            LOG.info("%s", json.dumps(export_national(args.root)))
+            return 0
+        if args.command == "collect":
+            report = collect(args.root, args.workers, args.retries, args.max_requests)
+            return int(any(group["status"] != "done" for group in report["groups"]))
         if args.command == "parse":
             report = convert(args.root)
             if report["attendance_issues"]:
