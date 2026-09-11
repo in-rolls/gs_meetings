@@ -1,0 +1,16 @@
+[
+  {
+    "code": 1030,
+    "name": "Ambala-I",
+    "count": 117,
+    "level": "I",
+    "childlevel": "V"
+  },
+  {
+    "code": 1031,
+    "name": "Ambala-Ii",
+    "count": 16,
+    "level": "I",
+    "childlevel": "V"
+  }
+]

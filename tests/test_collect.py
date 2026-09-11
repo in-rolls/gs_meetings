@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
@@ -82,3 +83,17 @@ def test_conflicting_route_fails_instead_of_losing_a_parent(tmp_path, monkeypatc
             db, "current", "gp", {"district_code": "2"}, stateId=6, code=10
         )
     db.close()
+
+
+def test_low_storage_stops_before_fetching_and_keeps_pending_work(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(module, "Client", Client)
+    monkeypatch.setattr(
+        module.shutil, "disk_usage", lambda _path: SimpleNamespace(free=0)
+    )
+    Client.calls = []
+    report = module.collect(tmp_path)
+    assert report["storage_limited"] is True
+    assert all(group["status"] == "pending" for group in report["groups"])
+    assert Client.calls == []

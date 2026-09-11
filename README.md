@@ -10,9 +10,18 @@ and coverage limits below.
 
 ## Data
 
-The collector covers the current report and four archived editions. National
-collection is not yet complete, and no Dataverse deposit has been published.
-Output stays under `data/`.
+The current summary snapshot contains **1,230,342 GP-by-edition records** from the
+live report and four archives. It includes explicit source coverage gaps.
+The package also collects dated meeting listings and individual facilitator
+reports. Output stays under `data/`; no Dataverse deposit has been published.
+
+| Summary edition | GP/TLB records |
+|---|---:|
+| `PPC2018` | 217,338 |
+| `PPC2019` | 240,301 |
+| `PPC2020` | 258,529 |
+| `PPC` | 257,190 |
+| `current` | 256,984 |
 
 | File | Contents |
 |---|---|
@@ -26,6 +35,24 @@ Output stays under `data/`.
 | `tables/reconciliation.parquet` | GP sums compared with the immediate parent's reported totals |
 | `tables/attendance_issues.json`, `tables/ambiguous_gp_keys.json` | Attendance inconsistencies and GP codes appearing under multiple parents |
 | `tables/manifest.json`, `tables/SCHEMA.json`, `tables/CHECKSUMS` | Coverage, row counts, output types and SHA-256 checksums |
+
+The dated collection uses a separate directory. Its `tables/meetings.parquet`
+contains dated source listings, `duplicate_candidate_events.parquet` identifies
+repeated combinations of geography/date/type, and its own coverage and manifest
+files document failed routes, missing hierarchy fields and date ranges.
+
+Facilitator reports are stored separately under `data/feedback/`:
+
+| File | Contents |
+|---|---|
+| `tables/feedback.parquet` | One report per source URL: reported date, attendance, discussion indicators and provenance |
+| `tables/feedback_answers.parquet` | Every labelled question with its text and yes/no answer |
+| `tables/feedback_tables.parquet` | Original table headers and typed cells, including departmental representatives and participation |
+| `tables/feedback_links.parquet` | Links to dated listing rows, with date/type comparisons and repeated-report flags |
+
+Compressed raw responses, schema files, checksums and coverage manifests accompany
+each collection. The detailed reports take substantially longer to download than
+the summary tables; all stages resume from completed requests.
 
 See [SCHEMA.md](SCHEMA.md) for units, keys and join rules, and
 [PILOT.md](PILOT.md) for the verified Ambala sample and source comparison.
@@ -76,10 +103,12 @@ These labels were checked on 2026-09-11. In particular, the archive called
 
 Separate [Gram Sabhas held](https://gpdp.nic.in/gramSabhasHeldReport.html) and
 [facilitator feedback](https://gpdp.nic.in/facilitatorFeedbackReport.html) pages
-offer financial years 2022–2023 through 2025–2026. Their page templates include
-meeting dates. Those responses still need verification and collection; they are
-not included in the summary tables. Actual meeting dates will be stored separately
-from the requested financial year and the UTC download timestamp.
+offer financial years 2022–2023 through 2025–2026. Dated listings have been verified
+against the live reports and are collected separately from the summary tables.
+The four archives also provide meeting dates. Actual meeting dates are stored
+separately from the requested financial year and the UTC download timestamp.
+For example, Ambala-I's 2024–2025 report lists Adho Majra on 2024-11-22; its PPC
+archive lists a meeting on 2021-12-01.
 
 ## Coverage and interpretation
 
@@ -100,6 +129,12 @@ from the requested financial year and the UTC download timestamp.
   reported explicitly; matching totals alone do not establish full GP coverage.
 - The portal omits state codes 4 and 7 from its displayed state table. Raw state
   responses retain them; national traversal follows the displayed hierarchy.
+- Some summary routes return server database errors. These remain in the request
+  queue and coverage report. A failed parent request can hide additional children;
+  the number of failed URLs therefore understates the number of missing GPs.
+- Dated listings can repeat a local body and date. Their `id` fields are report-row
+  numbers, not verified permanent event identifiers. Rows remain separate, with
+  duplicate candidate event keys flagged for analysis.
 
 ## How collected
 
@@ -120,9 +155,15 @@ uses those same public requests. No login is required for these aggregate report
 The hierarchy follows the portal controller: Nagaland, Mizoram and Meghalaya go
 directly from state to GP/TLB; Puducherry goes from state to block; district rows
 with level `V` go directly to GP rather than through a block. Other districts use
-level `I` and a block listing. Unknown levels stop enumeration instead of skipping
-geographies. Archive paths use the same service request shapes; geographic coverage
+level `I` and a block listing. Missing hierarchy fields are retained as routing
+gaps while valid siblings continue. Archive paths use the same service request shapes; geographic coverage
 must still be checked separately for each edition.
+
+Where summary hierarchy routes fail, the complete pipeline also tries parent codes
+verified in the same edition's dated meeting reports. The fallback source URL and
+requested year are retained in request context. This supplies a collection route,
+not a year assignment to summary counts. No parent totals are invented for those
+recovered requests.
 
 Each successful response is saved atomically and reused on resume. Failed or damaged
 captures are retried; HTTP errors and HTML error pages never become empty data.
@@ -139,8 +180,26 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync --frozen --group dev
+uv run gs-meetings collect-all --root data
+```
+
+This runs the summary, dated-meeting and facilitator-report stages, retries failed
+requests, and exports the available data with explicit source-error manifests.
+`pipeline-progress.json` records its current stage. Its `complete` flag means the
+queued work and exports finished; consult the individual manifests for geographic
+coverage. Source failures produce a nonzero exit code even when valid deliverables
+have been written. With less than 2 GiB free, collection stops before scheduling
+more requests and preserves the checkpoint.
+
+Each stage can also be run separately:
+
+```sh
 uv run gs-meetings collect --root data/national
 uv run gs-meetings export --root data/national
+uv run gs-meetings collect-meetings --root data/meetings
+uv run gs-meetings export-meetings --root data/meetings
+uv run gs-meetings collect-feedback --meetings-root data/meetings --root data/feedback
+uv run gs-meetings export-feedback --root data/feedback
 ```
 
 `collect` traverses all five editions and checkpoints each completed request in
@@ -150,6 +209,26 @@ concurrency; `--max-requests` limits new requests in an invocation. Incomplete
 queues produce a nonzero exit code. `export` reads saved responses without network
 access and refuses to export a queue with pending or failed requests. A completed
 queue can still contain empty source responses; those remain explicit coverage gaps.
+
+`collect-meetings` traverses the four selectable financial years and the four
+archives, using four workers and two retries by default. It includes the archived
+Gram Sabha (`S`) and Gram Panchayat meeting (`M`) selectors where available; the
+current report also distinguishes district (`Z`), block (`B`) and GP (`G`) scopes.
+Keep those categories separate when analyzing participation. Unknown child
+hierarchies are retained in the manifest while valid sibling routes continue.
+
+After retrying persistent source failures, each export command accepts
+`--allow-source-errors`. This writes the available records with every failed URL
+listed in the manifest; it never treats them as empty data or a successful request.
+Pending and running requests still prevent export. Successful request coverage
+and complete geographic coverage are different claims.
+
+Feedback collection can begin while dated listings are downloading. Repeat it
+after the dated stage finishes to add the remaining reports. Feedback export checks
+that all completed dated listings have been processed. In the 2018 archive, a
+feedback URL identifies a GP without a date; the export checks the report's actual
+date against every linked meeting. Repeated links or mismatched dates/types require
+attention before joining attendance to a meeting table.
 
 For a selected state or district:
 

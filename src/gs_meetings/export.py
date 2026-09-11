@@ -67,7 +67,7 @@ COVERAGE_SCHEMA = pa.schema(
 )
 
 
-def export_national(root: Path) -> dict:
+def export_national(root: Path, *, allow_source_errors: bool = False) -> dict:
     """Export only a completed queue, retaining source gaps and quality flags."""
     if not (root / "collection.sqlite").is_file():
         raise ValueError("No collection queue found")
@@ -77,7 +77,12 @@ def export_national(root: Path) -> dict:
             dict(row)
             for row in db.execute("SELECT * FROM requests ORDER BY edition,url")
         ]
-    if not tasks or any(task["status"] != "done" for task in tasks):
+        gaps = [
+            dict(row)
+            for row in db.execute("SELECT * FROM coverage_gaps ORDER BY url,raw_row")
+        ]
+    accepted = {"done", "error"} if allow_source_errors else {"done"}
+    if not tasks or any(task["status"] not in accepted for task in tasks):
         raise ValueError(
             "Collection is incomplete; finish pending/failed requests first"
         )
@@ -108,6 +113,8 @@ def export_national(root: Path) -> dict:
     part = output / "gp_reports.parquet.part"
     with pq.ParquetWriter(part, REPORT_SCHEMA, compression="zstd") as writer:
         for task in tasks:
+            if task["status"] != "done":
+                continue
             digest = hashlib.sha256(task["url"].encode()).hexdigest()
             capture = read_capture(
                 root / "raw" / task["edition"] / f"{digest}.jsonl.gz"
@@ -205,7 +212,9 @@ def export_national(root: Path) -> dict:
     if not sum(counts.values()):
         raise ValueError("No GP records were collected")
     if sum(counts.values()) != sum(
-        task["rows"] for task in tasks if task["level"] == "gp"
+        task["rows"]
+        for task in tasks
+        if task["level"] == "gp" and task["status"] == "done"
     ):
         raise ValueError("GP row conservation check failed")
     part.replace(output / "gp_reports.parquet")
@@ -244,6 +253,15 @@ def export_national(root: Path) -> dict:
         "rows": sum(counts.values()),
         "rows_by_edition": dict(counts),
         "requests": len(tasks),
+        "routing_gaps": gaps,
+        "all_discovered_requests_succeeded": all(
+            task["status"] == "done" for task in tasks
+        ),
+        "source_errors": [
+            {"url": task["url"], "error": task["error"]}
+            for task in tasks
+            if task["status"] == "error"
+        ],
         "empty_responses": [task["url"] for task in tasks if task["rows"] == 0],
         "attendance_issues": len(issues),
         "ambiguous_gp_keys": len(ambiguous),

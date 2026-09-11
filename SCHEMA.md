@@ -29,12 +29,30 @@ No crosswalk to dated LGD boundaries has been verified.
 | `homepage_plan_year` | String | Target plan year label, retained verbatim as a year pair |
 | `scope_note` | String | Limitations on interpreting each edition's time scope |
 
-The summary source has no meeting dates. Meeting-level records from the separate
-year-selectable reports will require a distinct table with the requested financial
-year, original date text, parsed meeting date, source geography, meeting type and
-capture timestamp. An event key cannot be specified safely until the live response
-shows whether the portal supplies an event ID or allows multiple meetings for one
-GP on the same date. No annual attendance series is inferred from the summaries.
+The summary source has no meeting dates. The separate dated listings are stored in
+`meetings.parquet`. No annual attendance series is inferred from the summaries.
+
+| Dated-table field | Type | Definition |
+|---|---|---|
+| `edition`, `financial_year` | String, nullable year label | Source edition and requested financial year; archive years are left null |
+| `meeting_date_raw`, `meeting_date` | String and nullable date | Original day-month-year text and parsed date |
+| `date_error` | Nullable string | Unparseable dates are retained and flagged |
+| `outside_financial_year` | Nullable boolean | Date falls outside April–March of the requested year; a check, not a correction |
+| `local_body_code`, `local_body_name` | String | Source local body; its category depends on `report_scope` |
+| `report_scope` | String | GP (`G`), district (`Z`) or block (`B`) report requested |
+| `hierarchy` | JSON string | Ordered source parent codes, names and levels |
+| `meeting_type`, `requested_meeting_type` | Nullable string | Returned type and archive selector; retained separately |
+| `source_row_id`, `row_ordinal` | Nullable string, integer | Source ID and one-based position in the response |
+| `observation_id` | String | Hash of URL and row position within this snapshot |
+| `candidate_event_key` | String | Hash of edition, state, scope, local body, raw date and returned type; repeated appearances under different requested years remain detectable |
+| `source_url`, `fetched_at`, `raw_row` | String, UTC timestamp, JSON string | Provenance and complete original row |
+
+The dated-table key is (`source_url`, `row_ordinal`) within one snapshot. Its source
+IDs reset across reports and are not treated as permanent meeting IDs. Repeated
+candidate event keys are reported without merging rows. Multiple meetings may
+occur on the same date, and the available fields do not always distinguish them.
+Do not join attendance aggregates to individual meetings as if they were that
+meeting's attendance. A GP aggregate joined to several dates would repeat its total.
 
 Homepage metadata was verified on 2026-09-11 against the links in
 `src/gs_meetings/editions.json`. The `PPC2019` homepage's 2020 campaign label is
@@ -79,3 +97,41 @@ the portal covers every GP. Parent and child captures can occur at different tim
 issue counts. `CHECKSUMS` verifies the exported artifacts. Original response text,
 request URLs and capture timestamps are retained in compressed raw files so the
 tables can be regenerated without another download.
+
+The dated export reports observed date ranges by edition/requested year, missing
+and invalid dates, and dates outside the requested financial year. It retains
+unknown hierarchy rows as routing gaps. With `--allow-source-errors`, either export
+includes failed URLs and sets `all_discovered_requests_succeeded` to false.
+It still refuses a queue with pending or running work. Missing children of failed
+or uninterpretable parents cannot be counted from that response.
+
+## Facilitator reports and meeting links
+
+`feedback.parquet` has one row per report URL. It retains the edition, state and
+local-body code, the date stated inside the report, UTC capture timestamp, five
+nullable attendance counts, and nullable yes/no indicators for presentations,
+discussions, quorum, Mahila Sabha and Bal Sabha. These indicators describe one
+report, whereas similarly named fields in the summary data are aggregate counts.
+Missing fields remain null; an absent checkbox or answer is not a reported no.
+
+`feedback_answers.parquet` preserves every labelled question and its text or
+boolean response. Its key is (`source_url`, `answer_ordinal`). Question wording
+can vary with edition, year and local-body category. `feedback_tables.parquet`
+preserves headers and ordered cells as Arrow lists/structs; its key is
+(`source_url`, `row_ordinal`). Department tables include the representative's name
+and whether they attended or presented. Document links are retained as metadata;
+linked media files are not downloaded by this package.
+
+`feedback_links.parquet` has one row per dated listing row. Join it to meetings on
+(`meeting_url` = `source_url`, `row_ordinal`), one-to-one within a snapshot. Then
+join `feedback_url` to the feedback table's `source_url`, many-to-one, retaining
+unmatched rows. Inspect `date_match`, `type_match` and
+`same_report_for_multiple_rows` before assigning attendance to individual meetings.
+Neither repeated observations nor repeated report links are silently collapsed.
+
+The 2018 feedback URL omits the meeting date; later archives and the current
+portal use different URL parameters. The report's own date is always retained and
+compared with the listing. Date comparison accepts equivalent display padding,
+but invalid or missing dates remain unmatched. Type comparison is limited to
+verified Sabha/Meeting labels. HTTP-200 error pages fail validation and never
+become zero-attendance observations.

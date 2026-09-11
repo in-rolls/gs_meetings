@@ -133,3 +133,18 @@ def test_missing_capture_fails(collection):
 def test_export_without_queue_does_not_create_one(tmp_path):
     assert main(["export", "--root", str(tmp_path)]) == 1
     assert not (tmp_path / "collection.sqlite").exists()
+
+
+def test_export_can_label_source_errors_but_never_pending_requests(collection):
+    with closing(sqlite3.connect(collection / "collection.sqlite")) as db, db:
+        db.execute(
+            "UPDATE requests SET status='error',error='HTTP 500' WHERE level='state'"
+        )
+    report = export_national(collection, allow_source_errors=True)
+    assert report["rows"] == 4
+    assert report["all_discovered_requests_succeeded"] is False
+    assert len(report["source_errors"]) == 5
+    with closing(sqlite3.connect(collection / "collection.sqlite")) as db, db:
+        db.execute("UPDATE requests SET status='pending' WHERE level='state'")
+    with pytest.raises(ValueError, match="incomplete"):
+        export_national(collection, allow_source_errors=True)

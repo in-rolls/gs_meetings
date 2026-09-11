@@ -2,8 +2,10 @@
 
 import json
 import logging
+import shutil
 import sqlite3
 import threading
+import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,10 +25,11 @@ def add_request(
     level: str,
     context: dict,
     parent: dict | None = None,
+    url: str | None = None,
     **params: int,
 ) -> None:
     """Queue a unique source URL, rejecting conflicting geography assignments."""
-    url = endpoint(edition, level, **params)
+    url = url or endpoint(edition, level, **params)
     encoded = json.dumps(context, sort_keys=True)
     existing = db.execute("SELECT context FROM requests WHERE url=?", (url,)).fetchone()
     if existing and existing[0] != encoded:
@@ -46,7 +49,7 @@ def add_request(
     )
 
 
-def open_queue(root: Path) -> sqlite3.Connection:
+def open_queue(root: Path, *, seed_summaries: bool = True) -> sqlite3.Connection:
     """Open the checkpoint and recover requests interrupted by a previous run."""
     root.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(root / "collection.sqlite")
@@ -62,10 +65,15 @@ def open_queue(root: Path) -> sqlite3.Connection:
         "ON requests(status,priority,attempts,url)"
     )
     db.execute(
+        "CREATE TABLE IF NOT EXISTS coverage_gaps "
+        "(url TEXT, raw_row TEXT, reason TEXT, PRIMARY KEY(url,raw_row,reason))"
+    )
+    db.execute(
         "UPDATE requests SET status='pending' WHERE status IN ('running','error')"
     )
-    for edition in EDITIONS:
-        add_request(db, edition, "state", {"edition": edition})
+    if seed_summaries:
+        for edition in EDITIONS:
+            add_request(db, edition, "state", {"edition": edition})
     db.commit()
     return db
 
@@ -108,7 +116,14 @@ def children(db: sqlite3.Connection, task: dict, rows: list[dict]) -> None:
                     db, edition, "gp", path, row, stateId=state, code=row["code"]
                 )
             else:
-                raise ValueError(f"Unknown district routing: {row['level']}")
+                db.execute(
+                    "INSERT OR IGNORE INTO coverage_gaps VALUES (?,?,?)",
+                    (
+                        task["url"],
+                        json.dumps(row, ensure_ascii=False),
+                        "Missing district routing level",
+                    ),
+                )
         elif level == "block":
             path = {
                 **context,
@@ -166,9 +181,20 @@ def collect(
         return run_queue(root, workers, retries, max_requests)
 
 
-def run_queue(root: Path, workers: int, retries: int, max_requests: int | None) -> dict:
+def run_queue(
+    root: Path,
+    workers: int,
+    retries: int,
+    max_requests: int | None,
+    *,
+    initialize=None,
+    expand=None,
+    client_factory=None,
+) -> dict:
     """Use one session per thread and edition; mutate the queue only in this thread."""
-    db = open_queue(root)
+    db = (initialize or open_queue)(root)
+    expand = expand or children
+    client_factory = client_factory or Client
     local = threading.local()
     clients = []
     client_lock = threading.Lock()
@@ -177,19 +203,29 @@ def run_queue(root: Path, workers: int, retries: int, max_requests: int | None) 
         if not hasattr(local, "clients"):
             local.clients = {}
         if task["edition"] not in local.clients:
-            client = Client(root, task["edition"], retries)
+            client = client_factory(root, task["edition"], retries)
             local.clients[task["edition"]] = client
             with client_lock:
                 clients.append(client)
         return local.clients[task["edition"]].get(task["url"])[0]
 
     submitted = finished = 0
+    last_progress = 0.0
+    storage_limited = False
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             pending = {}
             while True:
-                while len(pending) < workers and (
-                    max_requests is None or submitted < max_requests
+                if (
+                    time.monotonic() - last_progress >= 30
+                    and shutil.disk_usage(root).free < 2 * 1024**3
+                ):
+                    storage_limited = True
+                    LOG.error("Less than 2 GiB free; stopping new requests")
+                while (
+                    not storage_limited
+                    and len(pending) < workers
+                    and (max_requests is None or submitted < max_requests)
                 ):
                     task = db.execute(
                         "SELECT * FROM requests WHERE status='pending' "
@@ -213,7 +249,10 @@ def run_queue(root: Path, workers: int, retries: int, max_requests: int | None) 
                     task = pending.pop(future)
                     try:
                         rows = future.result()
-                        children(db, task, rows)
+                        db.execute(
+                            "DELETE FROM coverage_gaps WHERE url=?", (task["url"],)
+                        )
+                        expand(db, task, rows)
                         db.execute(
                             "UPDATE requests SET status='done',rows=?,error=NULL "
                             "WHERE url=?",
@@ -228,10 +267,15 @@ def run_queue(root: Path, workers: int, retries: int, max_requests: int | None) 
                         LOG.error("Failed %s: %s", task["url"], exc)
                     db.commit()
                     finished += 1
-                progress(db, root)
+                if time.monotonic() - last_progress >= 30:
+                    progress(db, root)
+                    last_progress = time.monotonic()
                 if finished and finished % 100 == 0:
                     LOG.info("Completed %s requests in this invocation", finished)
-        return progress(db, root)
+        result = progress(db, root)
+        result["storage_limited"] = storage_limited
+        atomic_json(root / "collection-progress.json", result)
+        return result
     finally:
         for client in clients:
             client.close()

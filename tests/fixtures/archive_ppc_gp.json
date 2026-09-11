@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "code": 27783,
+    "name": "ADHO MAJRA",
+    "gramSabhaDate": "01-12-2021",
+    "meetingType": "S"
+  },
+  {
+    "id": 2,
+    "code": 27784,
+    "name": "AHEMA",
+    "gramSabhaDate": "29-11-2021",
+    "meetingType": "S"
+  }
+]
