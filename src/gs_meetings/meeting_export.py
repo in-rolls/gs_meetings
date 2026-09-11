@@ -152,7 +152,15 @@ def export_meetings(root: Path, *, allow_source_errors: bool = False) -> dict:
         pa.schema(
             [
                 (name, pa.string())
-                for name in ["edition", "level", "url", "context", "status", "error"]
+                for name in [
+                    "edition",
+                    "level",
+                    "url",
+                    "context",
+                    "parent",
+                    "status",
+                    "error",
+                ]
             ]
             + [("rows", pa.int64())]
         ),

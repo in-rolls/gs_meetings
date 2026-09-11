@@ -61,6 +61,7 @@ COVERAGE_SCHEMA = pa.schema(
         ("level", pa.string()),
         ("url", pa.string()),
         ("context", pa.string()),
+        ("parent", pa.string()),
         ("rows", pa.int64()),
         ("status", pa.string()),
     ]

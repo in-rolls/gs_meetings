@@ -127,12 +127,15 @@ def meeting_children(db, task: dict, rows: list[dict]) -> None:
         return
     if stage == "meetings":
         raise ValueError("Expected dated meetings, received hierarchy rows")
-    seen = set()
+    seen = {}
     for row in rows:
         code = row.get("stateCode", row.get("code", row.get("local_body_code")))
+        encoded = json.dumps(row, sort_keys=True)
+        if seen.get(code) == encoded:
+            continue
         if code in seen:
             raise ValueError(f"Duplicate hierarchy code {code}")
-        seen.add(code)
+        seen[code] = encoded
         if stage == "states":
             if code in {4, 7}:
                 continue

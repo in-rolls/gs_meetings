@@ -186,6 +186,33 @@ def test_unknown_archived_row_keeps_working_siblings_and_records_gap(tmp_path):
     db.close()
 
 
+def test_identical_hierarchy_duplicates_request_the_child_once(tmp_path):
+    db = open_queue(tmp_path, seed_summaries=False)
+    task = {
+        "url": "https://example.org/hierarchy",
+        "context": json.dumps(
+            {
+                "edition": "PPC2018",
+                "stage": "blocks",
+                "state_code": "21",
+                "requested_meeting_type": None,
+                "listing_level": "I",
+                "report_scope": "G",
+            }
+        ),
+    }
+    row = {
+        "code": 3846,
+        "name": "CHITRAKONDA",
+        "count": 18,
+        "level": "V",
+        "levelCount": 0,
+    }
+    meeting_children(db, task, [row, dict(row)])
+    assert db.execute("SELECT count(*) FROM requests").fetchone()[0] == 1
+    db.close()
+
+
 def test_meeting_export_roundtrip_preserves_duplicates_and_reports_failure(tmp_path):
     db = open_queue(tmp_path, seed_summaries=False)
     context = {

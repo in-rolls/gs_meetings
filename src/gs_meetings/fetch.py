@@ -115,6 +115,8 @@ class Client:
                 status=response.status_code, body=response.text, final_url=response.url
             )
             response.raise_for_status()
+            if not response.text.strip():
+                raise ValueError("Empty response body")
             rows = (
                 self.parser(response.text)
                 if self.parser
