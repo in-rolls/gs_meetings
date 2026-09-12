@@ -27,6 +27,7 @@ SCHEMAS = {
                 "date_error",
                 "feedback_type",
                 "document_links",
+                "images",
             ]
         ]
         + [
