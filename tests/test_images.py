@@ -376,3 +376,54 @@ def test_cli_dry_run(tmp_path, monkeypatch, capsys):
         ]
         == 4
     )
+
+
+def test_export_publishes_manifest_while_holding_the_lock(tmp_path, monkeypatch):
+    source = feedback_root(tmp_path)
+    root = tmp_path / "images"
+    fake_portal(monkeypatch, lambda url: Response(JPEG))
+    collect_images(root, source, workers=2, retries=1, seed_workers=1)
+    original = images_module.atomic_json
+    held = []
+
+    def publish(path, value):
+        if path.name == "manifest.json":
+            with (root / "collection.lock").open("w") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held.append(False)
+                except BlockingIOError:
+                    held.append(True)
+        original(path, value)
+
+    monkeypatch.setattr(images_module, "atomic_json", publish)
+    export_images(root)
+    assert held == [True]
+
+
+def test_close_failure_leaves_no_temporary_file(tmp_path, monkeypatch):
+    fake_portal(monkeypatch, lambda url: Response(JPEG))
+    real_fdopen = images_module.os.fdopen
+
+    class FailingClose:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def write(self, data):
+            return self.stream.write(data)
+
+        def __exit__(self, *exc):
+            self.stream.close()
+            raise OSError("No space left on device")
+
+    monkeypatch.setattr(
+        images_module.os, "fdopen", lambda *a, **kw: FailingClose(real_fdopen(*a, **kw))
+    )
+    client = ImageClient(tmp_path, "PPC")
+    with pytest.raises(OSError, match="No space"):
+        client.get("https://gpdp.nic.in/PPC/file/image/1")
+    client.close()
+    assert not [path for path in tmp_path.rglob("*") if path.is_file()]

@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import io
 import json
+import os
 import sqlite3
 import tempfile
 from collections import Counter
@@ -175,16 +176,12 @@ class ImageClient(Client):
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             # Threads can fetch identical bytes from different URLs at once.
-            with tempfile.NamedTemporaryFile(
-                dir=path.parent, suffix=".part", delete=False
-            ) as part:
-                part_path = Path(part.name)
-                try:
-                    part.write(body)
-                except BaseException:
-                    part_path.unlink(missing_ok=True)
-                    raise
+            handle, name = tempfile.mkstemp(dir=path.parent, suffix=".part")
+            part_path = Path(name)
             try:
+                # Closing flushes buffered bytes, so it can fail as well.
+                with os.fdopen(handle, "wb") as part:
+                    part.write(body)
                 part_path.replace(path)
             except BaseException:
                 part_path.unlink(missing_ok=True)
@@ -350,13 +347,13 @@ def export_images(root: Path, *, allow_source_errors: bool = False) -> dict:
             unique_files = db.execute(
                 "SELECT count(DISTINCT sha256) FROM images"
             ).fetchone()[0]
-    report = {
-        "rows": dict(counts),
-        "unique_files": unique_files,
-        "requests": groups,
-        "all_discovered_requests_succeeded": not groups.get("error"),
-        "image_key": "image_url",
-        "join_rule": "image_refs.image_url to images.image_url, many-to-one",
-    }
-    atomic_json(output / "manifest.json", report)
+        report = {
+            "rows": dict(counts),
+            "unique_files": unique_files,
+            "requests": groups,
+            "all_discovered_requests_succeeded": not groups.get("error"),
+            "image_key": "image_url",
+            "join_rule": "image_refs.image_url to images.image_url, many-to-one",
+        }
+        atomic_json(output / "manifest.json", report)
     return report
