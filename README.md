@@ -46,8 +46,8 @@ Facilitator reports are stored separately under `data/feedback/`:
 
 | File | Contents |
 |---|---|
-| `tables/feedback.parquet` | One report per source URL: reported date, attendance, discussion indicators and provenance |
-| `tables/feedback_answers.parquet` | Every labelled question with its text and yes/no answer |
+| `tables/feedback.parquet` | One report per source URL: reported date, attendance, discussion indicators, photo references and provenance |
+| `tables/feedback_answers.parquet` | Every question on the form with its text and yes/no answer |
 | `tables/feedback_tables.parquet` | Original table headers and typed cells, including departmental representatives and participation |
 | `tables/feedback_links.parquet` | Links to dated listing rows, with date/type comparisons and repeated-report flags |
 
