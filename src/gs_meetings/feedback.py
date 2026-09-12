@@ -41,18 +41,52 @@ def boolean_icon(cell):
     return None
 
 
+def cell_text(cell) -> str:
+    """Keep a textarea's line breaks: they are the only separator between items."""
+    textarea = cell.find("textarea")
+    if textarea is None:
+        return normalized(cell.get_text(" ", strip=True))
+    lines = (" ".join(line.split()) for line in textarea.get_text().splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def unlabelled_icon_row(node):
+    """Return a question and its icon cell when rendered without a <label>.
+
+    Archive editions (PPC, PPC2018, PPC2019) show the GPDP discussion questions
+    as plain text beside a yes/no icon; the current portal wraps them in labels.
+    """
+    if "row" not in (node.get("class") or []):
+        return None
+    cells = node.find_all("div", recursive=False)
+    if len(cells) != 2 or node.find(["label", "img", "textarea", "table"]):
+        return None
+    question = normalized(cells[0].get_text(" ", strip=True))
+    if not question or normalized(cells[1].get_text(" ", strip=True)):
+        return None
+    return question, cells[1]
+
+
 def parse_feedback(html: str) -> list[dict]:
-    """Parse the displayed form, retaining every labelled answer and table row."""
+    """Parse the displayed form, retaining every question, table row and image."""
     soup = BeautifulSoup(html, "html.parser")
     form = soup.find("form", id="FACILITATOR_MODEL")
     if form is None:
         raise ValueError("Facilitator report form is absent")
     answers = []
-    for label in form.find_all("label"):
-        question = normalized(label.get_text(" ", strip=True))
+    for node in form.find_all(["label", "div"]):
+        if node.name == "div":
+            row = unlabelled_icon_row(node)
+            if row is not None:
+                question, cell = row
+                answers.append(
+                    {"question": question, "text": None, "boolean": boolean_icon(cell)}
+                )
+            continue
+        question = normalized(node.get_text(" ", strip=True))
         if not question:
             continue
-        parent = label.parent
+        parent = node.parent
         text = normalized(parent.get_text(" ", strip=True))
         answer = text[len(question) :].strip(" :") if text.startswith(question) else ""
         cell = parent
@@ -60,7 +94,7 @@ def parse_feedback(html: str) -> list[dict]:
             sibling = parent.find_next_sibling("div")
             if sibling is not None and sibling.find("label") is None:
                 cell = sibling
-                answer = normalized(cell.get_text(" ", strip=True))
+                answer = cell_text(cell)
         answers.append(
             {
                 "question": question,
@@ -147,6 +181,17 @@ def parse_feedback(html: str) -> list[dict]:
         "tables": json.dumps(tables, ensure_ascii=False),
         "document_links": json.dumps(
             [link["href"] for link in form.find_all("a", href=True)], ensure_ascii=False
+        ),
+        "images": json.dumps(
+            [
+                {
+                    "src": image["src"],
+                    "caption": normalized(image.parent.get_text(" ", strip=True))
+                    or None,
+                }
+                for image in form.find_all("img", src=True)
+            ],
+            ensure_ascii=False,
         ),
     }
     record["attendance_inconsistent"] = any(

@@ -51,6 +51,105 @@ def test_feedback_counts_and_date(name, attendance, meeting_date):
     assert json.loads(record["tables"])
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        (
+            "feedback_detail_current",
+            {
+                "funds_utilized_discussion": True,
+                "resource_discussion": True,
+                "gaps_discussion": True,
+                "resolution_passed_recorded": True,
+                "quorum_attended": True,
+                "mahila_sabha_held": False,
+                "bal_sabha_held": False,
+                "covid_behavior_discussed": True,
+            },
+        ),
+        (
+            "feedback_ppc",
+            {
+                "funds_utilized_discussion": True,
+                "resource_discussion": True,
+                "gaps_discussion": True,
+                "resolution_passed_recorded": True,
+                "quorum_attended": None,
+                "mahila_sabha_held": None,
+                "bal_sabha_held": None,
+                "covid_behavior_discussed": True,
+            },
+        ),
+        (
+            "feedback_2018",
+            {
+                "funds_utilized_discussion": False,
+                "resource_discussion": True,
+                "gaps_discussion": False,
+                "resolution_passed_recorded": True,
+                "quorum_attended": None,
+                "mahila_sabha_held": None,
+                "bal_sabha_held": None,
+                "covid_behavior_discussed": None,
+            },
+        ),
+    ],
+)
+def test_discussion_indicators_with_and_without_labels(name, expected):
+    """Archive editions render these questions as unlabelled text beside an icon."""
+    record = parse_feedback((FIXTURES / f"{name}.html").read_text())[0]
+    assert {key: record[key] for key in expected} == expected
+    questions = [row["question"] for row in json.loads(record["answers"])]
+    assert "Review of current year fund activities and fund utilized" in questions
+
+
+@pytest.mark.parametrize(
+    ("name", "images"),
+    [
+        (
+            "feedback_detail_current",
+            [
+                {"src": "file/image/8990473", "caption": "Gram Sabha Image"},
+                {
+                    "src": "file/image/8990472",
+                    "caption": "Public Information Board Image",
+                },
+            ],
+        ),
+        (
+            "feedback_ppc",
+            [{"src": "file/image/4814603", "caption": "Gram Sabha Image"}],
+        ),
+        (
+            "feedback_2018",
+            [
+                {"src": "file/image/810091", "caption": "Gram Sabha Image"},
+                {
+                    "src": "file/image/810092",
+                    "caption": "Public Information Board Image",
+                },
+            ],
+        ),
+    ],
+)
+def test_report_images_are_retained(name, images):
+    record = parse_feedback((FIXTURES / f"{name}.html").read_text())[0]
+    assert json.loads(record["images"]) == images
+
+
+def test_textarea_lists_keep_line_breaks():
+    record = parse_feedback((FIXTURES / "feedback_ppc.html").read_text())[0]
+    answers = {row["question"]: row["text"] for row in json.loads(record["answers"])}
+    assert answers["Mapping of Sankalp to Focus Areas"] == "Drinking water\nEducation"
+    assert answers["Sankalp of Gram Panchayat"] == "Sankalp of Gram Panchayat"
+    record = parse_feedback(
+        '<form id="FACILITATOR_MODEL"><div class="row"><div><label>Sankalp</label>'
+        "</div><div><textarea>Sankalp taken on :\r\nNo Poverty\r\n</textarea></div>"
+        "</div></form>"
+    )[0]
+    assert json.loads(record["answers"])[0]["text"] == "Sankalp taken on :\nNo Poverty"
+
+
 def test_http_200_error_page_is_not_zero_attendance():
     with pytest.raises(ValueError, match="form is absent"):
         parse_feedback((FIXTURES / "feedback_absent.html").read_text())
@@ -139,6 +238,11 @@ def test_feedback_seeding_deduplicates_requests_but_keeps_each_source_link(tmp_p
     assert pq.read_table(target / "tables/feedback.parquet").column(
         "people_present"
     ).to_pylist() == [28, 28]
+    images = pq.read_table(target / "tables/feedback.parquet").column("images")
+    assert [json.loads(value)[0]["src"] for value in images.to_pylist()] == [
+        "file/image/8990473",
+        "file/image/8990473",
+    ]
     assert report["rows"]["feedback_answers"] > 10
     assert report["rows"]["feedback_tables"] > 10
 
