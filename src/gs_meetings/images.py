@@ -2,6 +2,7 @@
 
 import fcntl
 import hashlib
+import io
 import json
 import sqlite3
 import tempfile
@@ -15,19 +16,16 @@ from urllib.parse import urljoin
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from PIL import Image, UnidentifiedImageError
 
 from gs_meetings.collect import add_request, open_queue, run_queue
 from gs_meetings.feedback import parse_feedback
 from gs_meetings.fetch import Client, atomic_json, read_capture
 
-# Magic bytes, not the Content-Type header, decide what was served: the portal
-# answers missing photos with an HTML error page.
-IMAGE_TYPES = {
-    b"\xff\xd8\xff": ".jpg",
-    b"\x89PNG\r\n\x1a\n": ".png",
-    b"GIF87a": ".gif",
-    b"GIF89a": ".gif",
-}
+# Decoding, not the Content-Type header or a signature, decides what was served:
+# the portal answers missing photos with HTML, and a bare signature is not a photo.
+IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif"}
+SEED_BATCH = 10000
 SCHEMAS = {
     "images": pa.schema(
         [
@@ -39,6 +37,8 @@ SCHEMAS = {
             ("sha256", pa.string()),
             ("bytes", pa.int64()),
             ("content_type", pa.string()),
+            ("width", pa.int64()),
+            ("height", pa.int64()),
             ("path", pa.string()),
             ("fetched_at", pa.timestamp("us", tz="UTC")),
         ]
@@ -74,7 +74,8 @@ def open_image_queue(root: Path) -> sqlite3.Connection:
     )
     db.execute(
         "CREATE TABLE IF NOT EXISTS images (url TEXT PRIMARY KEY, sha256 TEXT, "
-        "bytes INTEGER, content_type TEXT, path TEXT, fetched_at TEXT)"
+        "bytes INTEGER, content_type TEXT, width INTEGER, height INTEGER, "
+        "path TEXT, fetched_at TEXT)"
     )
     db.commit()
     return db
@@ -101,45 +102,62 @@ def seed_images(root: Path, *, feedback_root: Path, workers: int = 4):
                 )
                 if url not in seeded
             ]
-        paths = [
-            str(
-                feedback_root
-                / "raw"
-                / edition
-                / f"{hashlib.sha256(url.encode()).hexdigest()}.jsonl.gz"
-            )
-            for url, edition in tasks
-        ]
         with ProcessPoolExecutor(workers) as pool:
-            parsed = (
-                pool.map(report_images, paths, chunksize=64)
-                if workers > 1
-                else map(report_images, paths)
-            )
-            for count, ((url, edition), images) in enumerate(
-                zip(tasks, parsed, strict=True), 1
-            ):
-                if images is None:
-                    raise ValueError(
-                        f"Missing or damaged feedback capture while seeding: {url}"
+            # Bounded batches keep pending parse results from filling memory.
+            for start in range(0, len(tasks), SEED_BATCH):
+                batch = tasks[start : start + SEED_BATCH]
+                paths = [
+                    str(
+                        feedback_root
+                        / "raw"
+                        / edition
+                        / f"{hashlib.sha256(url.encode()).hexdigest()}.jsonl.gz"
                     )
-                for ordinal, image in enumerate(images, 1):
-                    image_url = urljoin(url, image["src"])
-                    add_request(
-                        db, edition, "image", {"edition": edition}, url=image_url
-                    )
-                    db.execute(
-                        "INSERT OR REPLACE INTO image_refs VALUES (?,?,?,?,?)",
-                        (url, ordinal, image_url, image["src"], image["caption"]),
-                    )
-                db.execute("INSERT INTO seeded_reports VALUES (?)", (url,))
-                if count % 1000 == 0:
-                    db.commit()
+                    for url, edition in batch
+                ]
+                parsed = (
+                    pool.map(report_images, paths, chunksize=64)
+                    if workers > 1
+                    else map(report_images, paths)
+                )
+                for (url, edition), images in zip(batch, parsed, strict=True):
+                    if images is None:
+                        raise ValueError(
+                            f"Missing or damaged feedback capture while seeding: {url}"
+                        )
+                    for ordinal, image in enumerate(images, 1):
+                        image_url = urljoin(url, image["src"])
+                        # The URL alone identifies a photo, whichever report links it.
+                        add_request(db, edition, "image", {}, url=image_url)
+                        db.execute(
+                            "INSERT OR REPLACE INTO image_refs VALUES (?,?,?,?,?)",
+                            (url, ordinal, image_url, image["src"], image["caption"]),
+                        )
+                    db.execute("INSERT INTO seeded_reports VALUES (?)", (url,))
+                db.commit()
         db.commit()
         return db
     except Exception:
         db.close()
         raise
+
+
+def decode_image(body: bytes, content_type: str) -> tuple[str, int, int]:
+    """Return the file suffix and size of a complete, decodable photo."""
+    try:
+        with Image.open(io.BytesIO(body)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(body)) as image:
+            image.load()
+            kind, (width, height) = image.format, image.size
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise ValueError(
+            f"Not an image: {content_type or 'no content type'}, "
+            f"{len(body)} bytes ({exc})"
+        ) from exc
+    if kind not in IMAGE_FORMATS:
+        raise ValueError(f"Not an image: unsupported format {kind}")
+    return IMAGE_FORMATS[kind], width, height
 
 
 class ImageClient(Client):
@@ -151,14 +169,7 @@ class ImageClient(Client):
         response.raise_for_status()
         body = response.content
         content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-        suffix = next(
-            (kind for magic, kind in IMAGE_TYPES.items() if body.startswith(magic)),
-            None,
-        )
-        if suffix is None:
-            raise ValueError(
-                f"Not an image: {content_type or 'no content type'}, {len(body)} bytes"
-            )
+        suffix, width, height = decode_image(body, content_type)
         digest = hashlib.sha256(body).hexdigest()
         path = self.root / "objects" / digest[:2] / f"{digest}{suffix}"
         if not path.exists():
@@ -167,12 +178,23 @@ class ImageClient(Client):
             with tempfile.NamedTemporaryFile(
                 dir=path.parent, suffix=".part", delete=False
             ) as part:
-                part.write(body)
-            Path(part.name).replace(path)
+                part_path = Path(part.name)
+                try:
+                    part.write(body)
+                except BaseException:
+                    part_path.unlink(missing_ok=True)
+                    raise
+            try:
+                part_path.replace(path)
+            except BaseException:
+                part_path.unlink(missing_ok=True)
+                raise
         row = {
             "sha256": digest,
             "bytes": len(body),
             "content_type": content_type,
+            "width": width,
+            "height": height,
             "path": str(path.relative_to(self.root)),
             "fetched_at": datetime.now(UTC).isoformat(),
         }
@@ -183,12 +205,14 @@ def store_image(db: sqlite3.Connection, task: dict, rows: list[dict]) -> None:
     """Record where a downloaded photo's bytes live."""
     row = rows[0]
     db.execute(
-        "INSERT OR REPLACE INTO images VALUES (?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO images VALUES (?,?,?,?,?,?,?,?)",
         (
             task["url"],
             row["sha256"],
             row["bytes"],
             row["content_type"],
+            row["width"],
+            row["height"],
             row["path"],
             row["fetched_at"],
         ),
@@ -265,44 +289,67 @@ def plan_images(root: Path, feedback_root: Path, workers: int = 4) -> dict:
 
 
 def export_images(root: Path, *, allow_source_errors: bool = False) -> dict:
-    """Write photo and report-reference tables from a drained queue."""
-    with closing(open_image_queue(root)) as db:
-        groups = dict(db.execute("SELECT status,count(*) FROM requests GROUP BY 1"))
-        allowed = {"done", "error"} if allow_source_errors else {"done"}
-        if not groups or set(groups) - allowed:
-            raise ValueError("Image collection is incomplete")
-        output = root / "tables"
-        output.mkdir(exist_ok=True)
-        queries = {
-            "images": (
-                "SELECT r.url AS image_url,r.edition,r.status,r.error,i.sha256,"
-                "i.bytes,i.content_type,i.path,i.fetched_at FROM requests r "
-                "LEFT JOIN images i ON r.url=i.url ORDER BY r.url"
-            ),
-            "image_refs": "SELECT * FROM image_refs ORDER BY report_url,image_ordinal",
-        }
-        counts = Counter()
-        for name, query in queries.items():
+    """Write photo and report-reference tables from a drained, idle queue.
+
+    The queue is read as is: failed and running requests are not rescheduled.
+    `manifest.json` is written last, so its presence marks a consistent export.
+    """
+    if not (root / "collection.sqlite").is_file():
+        raise ValueError("No image queue found")
+    with (root / "collection.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError(
+                "Image collection is running; export after it stops"
+            ) from exc
+        uri = f"{(root / 'collection.sqlite').resolve().as_uri()}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True)) as db:
             db.row_factory = sqlite3.Row
-            with pq.ParquetWriter(
-                output / f"{name}.parquet.part", SCHEMAS[name], compression="zstd"
-            ) as writer:
-                cursor = db.execute(query)
-                while batch := cursor.fetchmany(10000):
-                    rows = [dict(row) for row in batch]
-                    for row in rows:
-                        if name == "images":
-                            row["image_id"] = row["image_url"].rsplit("/", 1)[-1]
-                            if row["fetched_at"]:
-                                row["fetched_at"] = datetime.fromisoformat(
-                                    row["fetched_at"]
-                                )
-                    writer.write_table(pa.Table.from_pylist(rows, schema=SCHEMAS[name]))
-                    counts[name] += len(rows)
-            (output / f"{name}.parquet.part").replace(output / f"{name}.parquet")
-        unique_files = db.execute(
-            "SELECT count(DISTINCT sha256) FROM images"
-        ).fetchone()[0]
+            groups = dict(
+                tuple(row)
+                for row in db.execute("SELECT status,count(*) FROM requests GROUP BY 1")
+            )
+            allowed = {"done", "error"} if allow_source_errors else {"done"}
+            if not groups or set(groups) - allowed:
+                raise ValueError("Image collection is incomplete")
+            output = root / "tables"
+            output.mkdir(exist_ok=True)
+            (output / "manifest.json").unlink(missing_ok=True)
+            queries = {
+                "images": (
+                    "SELECT r.url AS image_url,r.edition,r.status,r.error,i.sha256,"
+                    "i.bytes,i.content_type,i.width,i.height,i.path,i.fetched_at "
+                    "FROM requests r LEFT JOIN images i ON r.url=i.url ORDER BY r.url"
+                ),
+                "image_refs": (
+                    "SELECT * FROM image_refs ORDER BY report_url,image_ordinal"
+                ),
+            }
+            counts = Counter()
+            for name, query in queries.items():
+                with pq.ParquetWriter(
+                    output / f"{name}.parquet.part", SCHEMAS[name], compression="zstd"
+                ) as writer:
+                    cursor = db.execute(query)
+                    while batch := cursor.fetchmany(10000):
+                        rows = [dict(row) for row in batch]
+                        for row in rows:
+                            if name == "images":
+                                row["image_id"] = row["image_url"].rsplit("/", 1)[-1]
+                                if row["fetched_at"]:
+                                    row["fetched_at"] = datetime.fromisoformat(
+                                        row["fetched_at"]
+                                    )
+                        writer.write_table(
+                            pa.Table.from_pylist(rows, schema=SCHEMAS[name])
+                        )
+                        counts[name] += len(rows)
+            for name in queries:
+                (output / f"{name}.parquet.part").replace(output / f"{name}.parquet")
+            unique_files = db.execute(
+                "SELECT count(DISTINCT sha256) FROM images"
+            ).fetchone()[0]
     report = {
         "rows": dict(counts),
         "unique_files": unique_files,

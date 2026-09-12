@@ -1,14 +1,20 @@
 """Queue, download, deduplicate and export report photos without touching the portal."""
 
+import fcntl
 import gzip
 import hashlib
+import io
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
 import requests
+from PIL import Image
 
+import gs_meetings.images as images_module
 from gs_meetings.cli import main
 from gs_meetings.collect import add_request, open_queue
 from gs_meetings.images import (
@@ -20,7 +26,15 @@ from gs_meetings.images import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-JPEG = b"\xff\xd8\xff\xe0" + b"photo" * 20
+
+
+def encoded(size=(8, 6), color="white", kind="JPEG"):
+    stream = io.BytesIO()
+    Image.new("RGB", size, color).save(stream, kind)
+    return stream.getvalue()
+
+
+JPEG = encoded()
 REPORTS = {
     "https://gpdp.nic.in/PPC2018/facilitatorFeedbackDetails.html?gpCode=27783": (
         "PPC2018",
@@ -177,12 +191,143 @@ def test_download_deduplicates_rejects_non_images_and_resumes(tmp_path, monkeypa
     assert calls == ["https://gpdp.nic.in/file/image/8990472"]
 
 
-def test_image_client_rejects_bytes_that_are_not_an_image(tmp_path, monkeypatch):
-    fake_portal(monkeypatch, lambda url: Response(b"GIF-ish but not", "image/jpeg"))
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"GIF-ish but not",
+        b"GIF89a",
+        encoded()[:40],
+        encoded(kind="PNG")[:-20],
+    ],
+    ids=["not-image", "bare-gif-signature", "truncated-jpeg", "truncated-png"],
+)
+def test_image_client_rejects_undecodable_bytes(tmp_path, monkeypatch, body):
+    fake_portal(monkeypatch, lambda url: Response(body, "image/jpeg"))
     client = ImageClient(tmp_path, "PPC")
     with pytest.raises(ValueError, match="Not an image"):
         client.get("https://gpdp.nic.in/PPC/file/image/1")
     client.close()
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_image_client_records_dimensions_and_png(tmp_path, monkeypatch):
+    png = encoded((5, 3), "black", "PNG")
+    fake_portal(monkeypatch, lambda url: Response(png, "image/png"))
+    client = ImageClient(tmp_path, "PPC")
+    rows, path = client.get("https://gpdp.nic.in/PPC/file/image/1")
+    client.close()
+    assert (rows[0]["width"], rows[0]["height"]) == (5, 3)
+    assert path.suffix == ".png"
+    assert path.read_bytes() == png
+
+
+def test_failed_object_write_leaves_no_temporary_file(tmp_path, monkeypatch):
+    fake_portal(monkeypatch, lambda url: Response(JPEG))
+
+    def fail(self, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", fail)
+    client = ImageClient(tmp_path, "PPC")
+    with pytest.raises(OSError, match="disk full"):
+        client.get("https://gpdp.nic.in/PPC/file/image/1")
+    client.close()
+    assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+def test_same_photo_url_from_two_editions_is_queued_once(tmp_path):
+    root = tmp_path / "feedback"
+    db = open_queue(root, seed_summaries=False)
+    body = (
+        '<form id="FACILITATOR_MODEL"><div><img src="https://gpdp.nic.in/file/image/7"/>'
+        "Gram Sabha Image</div></form>"
+    )
+    for edition in ["PPC", "PPC2019"]:
+        url = f"https://gpdp.nic.in/{edition}/facilitatorFeedbackDetails.html?x=1"
+        add_request(db, edition, "gp", {"edition": edition}, url=url)
+        key = hashlib.sha256(url.encode()).hexdigest()
+        path = root / "raw" / edition / f"{key}.jsonl.gz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(path, "wt", encoding="utf-8") as stream:
+            json.dump(
+                {
+                    "url": url,
+                    "edition": edition,
+                    "ok": True,
+                    "done": True,
+                    "body": body,
+                },
+                stream,
+            )
+    db.execute("UPDATE requests SET status='done',rows=1")
+    db.commit()
+    db.close()
+    images = seed_images(tmp_path / "images", feedback_root=root, workers=1)
+    assert images.execute("SELECT count(*) FROM requests").fetchone()[0] == 1
+    assert images.execute("SELECT count(*) FROM image_refs").fetchone()[0] == 2
+    images.close()
+
+
+def test_seeding_in_small_batches_matches(tmp_path, monkeypatch):
+    monkeypatch.setattr(images_module, "SEED_BATCH", 1)
+    db = seed_images(tmp_path / "images", feedback_root=feedback_root(tmp_path))
+    assert db.execute("SELECT count(*) FROM image_refs").fetchone()[0] == 4
+    db.close()
+
+
+def test_export_keeps_failures_and_does_not_reschedule(tmp_path, monkeypatch):
+    source = feedback_root(tmp_path)
+    root = tmp_path / "images"
+
+    def bodies(url):
+        if url.endswith("8990472"):
+            return Response(b"<html>500</html>", "text/html")
+        return Response(JPEG)
+
+    fake_portal(monkeypatch, bodies)
+    collect_images(root, source, workers=2, retries=1, seed_workers=1)
+    with pytest.raises(ValueError, match="incomplete"):
+        export_images(root)
+    report = export_images(root, allow_source_errors=True)
+    assert report["requests"] == {"done": 3, "error": 1}
+    assert report["all_discovered_requests_succeeded"] is False
+    with closing(sqlite3.connect(root / "collection.sqlite")) as db:
+        statuses = dict(db.execute("SELECT status,count(*) FROM requests GROUP BY 1"))
+    assert statuses == {"done": 3, "error": 1}
+
+
+def test_export_refuses_while_collection_holds_the_lock(tmp_path, monkeypatch):
+    source = feedback_root(tmp_path)
+    root = tmp_path / "images"
+    fake_portal(monkeypatch, lambda url: Response(JPEG))
+    collect_images(root, source, workers=2, retries=1, seed_workers=1)
+    with (root / "collection.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(ValueError, match="running"):
+            export_images(root)
+
+
+def test_interrupted_export_leaves_no_manifest(tmp_path, monkeypatch):
+    source = feedback_root(tmp_path)
+    root = tmp_path / "images"
+    fake_portal(monkeypatch, lambda url: Response(JPEG))
+    collect_images(root, source, workers=2, retries=1, seed_workers=1)
+    export_images(root)
+    before = (root / "tables/images.parquet").read_bytes()
+    original = images_module.pq.ParquetWriter
+    opened = []
+
+    def writer(path, *args, **kwargs):
+        opened.append(path)
+        if len(opened) == 2:
+            raise OSError("interrupted")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(images_module.pq, "ParquetWriter", writer)
+    with pytest.raises(OSError, match="interrupted"):
+        export_images(root)
+    assert not (root / "tables/manifest.json").exists()
+    assert (root / "tables/images.parquet").read_bytes() == before
 
 
 def test_export_refuses_incomplete_queue_then_writes_tables(tmp_path, monkeypatch):
@@ -204,6 +349,7 @@ def test_export_refuses_incomplete_queue_then_writes_tables(tmp_path, monkeypatc
         "8990473",
     }
     assert all(row["status"] == "done" and row["bytes"] == len(JPEG) for row in images)
+    assert {(row["width"], row["height"]) for row in images} == {(8, 6)}
     refs = pq.read_table(root / "tables/image_refs.parquet").column("caption")
     assert "Public Information Board Image" in refs.to_pylist()
 
