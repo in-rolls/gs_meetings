@@ -55,8 +55,9 @@ Compressed raw responses, schema files, checksums and coverage manifests accompa
 each collection. The detailed reports take substantially longer to download than
 the summary tables; all stages resume from completed requests.
 
-See [SCHEMA.md](SCHEMA.md) for units, keys and join rules, and
-[PILOT.md](PILOT.md) for the verified Ambala sample and source comparison.
+See [SCHEMA.md](SCHEMA.md) for units, keys and join rules.
+[Fixture documentation](tests/fixtures/SOURCES.md) lists the source URLs and capture
+dates used in parser tests.
 
 ## Columns
 
