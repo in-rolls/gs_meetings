@@ -145,3 +145,20 @@ compared with the listing. Date comparison accepts equivalent display padding,
 but invalid or missing dates remain unmatched. Type comparison is limited to
 verified Sabha/Meeting labels. HTTP-200 error pages fail validation and never
 become zero-attendance observations.
+
+## Report photos
+
+`images.parquet` has one row per photo URL, keyed by `image_url`: the report's
+`file/image/<id>` reference resolved against the report URL. `image_id` is the
+portal's numeric identifier; it is not assumed unique across editions. `status` and
+`error` come from the request queue; `sha256`, `bytes`, `content_type`, `width`,
+`height`, `path` and `fetched_at` are null until the photo is downloaded. A photo
+is stored only if it decodes completely. `path` is relative to the
+collection root. Several URLs can share one `sha256` when the portal serves
+identical bytes for different reports, and those URLs share one stored file.
+
+`image_refs.parquet` has one row per photo on a report, keyed by (`report_url`,
+`image_ordinal`), with the `src` and caption as displayed. Join `image_url` to
+`images.parquet` many-to-one. In a September 2026 sample of 30 photos, all lacked
+camera metadata and none exceeded 1280 pixels; dates or coordinates printed on a
+photo are part of the image, not fields.
