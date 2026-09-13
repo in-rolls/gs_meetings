@@ -11,7 +11,7 @@ Verbatim public aggregate report responses, captured for parser and hierarchy te
 | `PPC2019.json` | https://gpdp.nic.in/PPC2019/stateSummaryAnalysisReport.html | 2026-09-11T19:10:03.038815+00:00 |
 | `PPC2018.json` | https://gpdp.nic.in/PPC2018/stateSummaryAnalysisReport.html | 2026-09-11T19:10:03.464905+00:00 |
 
-`historical_anomalies.json` contains five GP-row excerpts from the live Ambala pilot. Each entry includes its exact request URL and UTC capture timestamp; source row fields and values are unchanged. Whitespace is expanded.
+`historical_anomalies.json` contains five GP-row excerpts from the Ambala reports. Each entry includes its exact request URL and UTC capture timestamp; source row fields and values are unchanged. Whitespace is expanded.
 
 ## Dated meeting reports
 
