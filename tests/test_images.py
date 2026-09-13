@@ -427,3 +427,15 @@ def test_close_failure_leaves_no_temporary_file(tmp_path, monkeypatch):
         client.get("https://gpdp.nic.in/PPC/file/image/1")
     client.close()
     assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+def test_truncated_later_gif_frame_is_rejected(tmp_path, monkeypatch):
+    stream = io.BytesIO()
+    frames = [Image.new("RGB", (8, 6), color) for color in ["white", "black"]]
+    frames[0].save(stream, "GIF", save_all=True, append_images=frames[1:])
+    body = stream.getvalue()[:-3]
+    fake_portal(monkeypatch, lambda url: Response(body, "image/gif"))
+    client = ImageClient(tmp_path, "PPC")
+    with pytest.raises(ValueError, match="Not an image"):
+        client.get("https://gpdp.nic.in/PPC/file/image/1")
+    client.close()

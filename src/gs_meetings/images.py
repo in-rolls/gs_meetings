@@ -17,7 +17,7 @@ from urllib.parse import urljoin
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageSequence, UnidentifiedImageError
 
 from gs_meetings.collect import add_request, open_queue, run_queue
 from gs_meetings.feedback import parse_feedback
@@ -149,8 +149,10 @@ def decode_image(body: bytes, content_type: str) -> tuple[str, int, int]:
         with Image.open(io.BytesIO(body)) as image:
             image.verify()
         with Image.open(io.BytesIO(body)) as image:
-            image.load()
             kind, (width, height) = image.format, image.size
+            # load() decodes only the first frame of an animated GIF.
+            for frame in ImageSequence.Iterator(image):
+                frame.load()
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise ValueError(
             f"Not an image: {content_type or 'no content type'}, "
