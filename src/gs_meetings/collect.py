@@ -16,7 +16,7 @@ from gs_meetings.fetch import Client, atomic_json
 from gs_meetings.source import EDITIONS, endpoint
 
 LOG = logging.getLogger(__name__)
-PRIORITY = {"state": 0, "district": 1, "block": 2, "gp": 3}
+PRIORITY = {"state": 0, "district": 1, "block": 2, "gp": 3, "image": 4}
 
 
 def add_request(

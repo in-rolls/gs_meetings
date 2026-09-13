@@ -13,6 +13,7 @@ from gs_meetings.feedback_collect import collect_feedback
 from gs_meetings.feedback_export import export_feedback
 from gs_meetings.fetch import Client
 from gs_meetings.frame import enumerate_units, fetch_units
+from gs_meetings.images import collect_images, export_images, plan_images
 from gs_meetings.meeting_export import export_meetings
 from gs_meetings.meetings import collect_meetings
 from gs_meetings.parse import convert
@@ -63,6 +64,20 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--workers", type=positive, default=4)
     command.add_argument("--retries", type=positive, default=2)
     command.add_argument("--max-requests", type=positive)
+    command = commands.add_parser(
+        "collect-images",
+        help="Download report photos; --dry-run queues and projects without fetching",
+    )
+    command.add_argument("--root", type=Path, default=Path("data/images"))
+    command.add_argument("--feedback-root", type=Path, default=Path("data/feedback"))
+    command.add_argument("--workers", type=positive, default=4)
+    command.add_argument("--retries", type=positive, default=2)
+    command.add_argument("--max-requests", type=positive)
+    command.add_argument("--seed-workers", type=positive, default=4)
+    command.add_argument("--dry-run", action="store_true")
+    command = commands.add_parser("export-images")
+    command.add_argument("--root", type=Path, default=Path("data/images"))
+    command.add_argument("--allow-source-errors", action="store_true")
     for name in ["list", "fetch", "parse"]:
         command = commands.add_parser(name)
         command.add_argument("--root", type=Path, default=Path("data/current"))
@@ -85,6 +100,30 @@ def main(argv: list[str] | None = None) -> int:
                     for name in ["summaries", "meetings", "feedback"]
                 )
             )
+        if args.command == "collect-images":
+            if args.dry_run:
+                plan = plan_images(args.root, args.feedback_root, args.seed_workers)
+                LOG.info("%s", json.dumps(plan))
+                return 0
+            report = collect_images(
+                args.root,
+                args.feedback_root,
+                args.workers,
+                args.retries,
+                args.max_requests,
+                args.seed_workers,
+            )
+            return int(any(group["status"] != "done" for group in report["groups"]))
+        if args.command == "export-images":
+            LOG.info(
+                "%s",
+                json.dumps(
+                    export_images(
+                        args.root, allow_source_errors=args.allow_source_errors
+                    )
+                ),
+            )
+            return 0
         if args.command == "export-feedback":
             LOG.info(
                 "%s",

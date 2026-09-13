@@ -249,6 +249,39 @@ feedback URL identifies a GP without a date; the export checks the report's actu
 date against every linked meeting. Repeated links or mismatched dates/types require
 attention before joining attendance to a meeting table.
 
+### Report photos
+
+Facilitator reports usually link one or two photos: the Gram Sabha and, often, the
+public information board. `collect-all` does not download them. The photo stage is
+separate because the full set is large. In September 2026, a sample of 6,000 stored
+archive reports linked 1.64 photos each, and 30 downloaded photos averaged 61 KB.
+At those rates, roughly two million valid reports would link about 3.3 million
+photos, or about 200 GB. Queuing parses each completed report once, at about 30 ms
+of CPU per report; reruns skip reports already queued. Set `--seed-workers` to the
+cores available.
+
+```sh
+uv run gs-meetings collect-images --feedback-root data/feedback --root data/images --dry-run
+uv run gs-meetings collect-images --feedback-root data/feedback --root data/images --max-requests 50
+uv run gs-meetings collect-images --feedback-root data/feedback --root data/images
+uv run gs-meetings export-images --root data/images
+```
+
+`--dry-run` queues every photo referenced by the completed reports and writes
+`image-plan.json` with counts by edition, without contacting the portal. Rerun
+`--dry-run` after a pilot to project the remaining download from the mean size so
+far; collection itself does not update the plan.
+Collection stores each distinct photo once under `objects/`, named by the SHA-256 of
+its bytes, so a photo reused across reports takes no extra space. A response that
+does not decode as a complete JPEG, PNG or GIF, such as the portal's HTML error
+page, is a failed request. Rerun the command to retry failures and to queue reports
+completed since the last run. A hard kill can leave `.part` files under `objects/`;
+they are never referenced and can be deleted. `export-images` refuses to run while
+collection holds the lock. It writes `images.parquet`, one row per photo URL with its
+status, hash, size, dimensions and file path, and `image_refs.parquet`, one row per
+photo on each report with its caption. `manifest.json` is written last; without it,
+the tables are not a finished export.
+
 For a selected state or district:
 
 ```sh
