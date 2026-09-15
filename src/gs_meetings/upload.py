@@ -251,15 +251,20 @@ def deposit(
 def put_file(session: requests.Session, url: str, path: Path, backoff: float) -> None:
     """Retry a dropped PUT from the start; Zenodo only keeps completed objects."""
     for attempt in range(1, ATTEMPTS + 1):
-        with path.open("rb") as stream:
-            response = session.put(url, data=stream, timeout=TIMEOUT)
-        if response.ok:
-            return
-        if attempt == ATTEMPTS or response.status_code < 500:
-            checked(response)
-        LOG.warning(
-            "Upload of %s failed with %s; retrying", path.name, response.status_code
-        )
+        try:
+            with path.open("rb") as stream:
+                response = session.put(url, data=stream, timeout=TIMEOUT)
+        except requests.RequestException as exc:
+            if attempt == ATTEMPTS:
+                raise
+            failure: object = exc
+        else:
+            if response.ok:
+                return
+            if attempt == ATTEMPTS or response.status_code < 500:
+                checked(response)
+            failure = response.status_code
+        LOG.warning("Upload of %s failed with %s; retrying", path.name, failure)
         time.sleep(backoff * attempt)
 
 
