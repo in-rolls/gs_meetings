@@ -267,10 +267,16 @@ Exported tables are deposited on Zenodo in two steps, because the record cannot
 be changed once published:
 
 ```sh
+uv run gs-meetings data-card --root data
 uv run gs-meetings upload --root data --sandbox
 uv run gs-meetings upload --root data
 uv run gs-meetings upload --root data --publish
 ```
+
+`data-card` writes `data/deposit/README_DATA.md` from the stages' manifests
+(files and row counts, capture window, rows by edition and year, feedback
+outcomes, error counts, and the manifests' own caveats) and copies `SCHEMA.md`
+beside it, so the deposit's description cannot drift from the tables.
 
 `upload` creates a draft deposition the first time and records its ID in
 `data/zenodo.json` (`data/zenodo-sandbox.json` with `--sandbox`) before uploading

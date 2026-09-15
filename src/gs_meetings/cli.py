@@ -3,11 +3,13 @@
 import argparse
 import json
 import logging
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 import requests
 
 from gs_meetings.collect import collect
+from gs_meetings.datacard import write_data_card
 from gs_meetings.export import export_national
 from gs_meetings.feedback_collect import collect_feedback
 from gs_meetings.feedback_export import export_feedback
@@ -80,6 +82,12 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--root", type=Path, default=Path("data/images"))
     command.add_argument("--allow-source-errors", action="store_true")
     command = commands.add_parser(
+        "data-card",
+        help="Write deposit/README_DATA.md from the exported manifests",
+    )
+    command.add_argument("--root", type=Path, default=Path("data"))
+    command.add_argument("--schema", type=Path, default=Path("SCHEMA.md"))
+    command = commands.add_parser(
         "upload",
         help="Deposit exported tables on Zenodo as a draft; --publish makes it public",
     )
@@ -109,6 +117,12 @@ def main(argv: list[str] | None = None) -> int:
                     for name in ["summaries", "meetings", "feedback"]
                 )
             )
+        if args.command == "data-card":
+            report = write_data_card(
+                args.root, schema=args.schema, version=package_version("gs-meetings")
+            )
+            LOG.info("%s", json.dumps(report))
+            return 0
         if args.command == "upload":
             report = deposit(
                 args.root,
