@@ -277,9 +277,9 @@ uv run gs-meetings upload --root data --publish
 anything, so an interrupted run resumes into the same draft. Later runs reuse the
 draft, replace files whose checksum changed, and skip the rest. Files removed
 locally stay in the draft; delete them on Zenodo before publishing. A Parquet
-file over 100 MB is uploaded as numbered parts (`meetings-meetings-01.parquet`,
-`-02`, ...) that share its schema, because a single upload that runs for about
-an hour is dropped by Zenodo's proxy; read the parts together to rebuild the
+file over 50 MiB is uploaded as numbered parts (`meetings-meetings-01.parquet`,
+`-02`, ...) that share its schema, because Zenodo's proxy drops a single
+upload that is large or runs for long; read the parts together to rebuild the
 table. A dropped upload is retried from the start of the file. Every `*/tables/*` file is uploaded with its stage
 as a prefix, and files under `data/deposit/` (such as a copy of `SCHEMA.md`)
 are uploaded as they are. The token comes from `ZENODO_TOKEN`

@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import time
 from importlib.metadata import version as package_version
 from pathlib import Path
@@ -25,9 +26,10 @@ CONFIG = Path.home() / ".config" / "zenodo.ini"
 HOSTS = {False: "https://zenodo.org", True: "https://sandbox.zenodo.org"}
 REPOSITORY = "https://github.com/in-rolls/gs_meetings"
 TIMEOUT = (15, 1800)
-# Zenodo's proxy has dropped single PUTs that ran for about an hour, and
-# uploads from here have run at 60 KB/s, so a part must stay well under that.
-PART_BYTES = 100 * 1024**2
+# Zenodo's proxy dropped a 100 MiB PUT after about thirty minutes and a
+# 92 MiB one succeeded, at the 60 KB/s uploads from here get; 50 MiB stays
+# clear of both a size and a duration cutoff.
+PART_BYTES = 50 * 1024**2
 ATTEMPTS = 4
 
 
@@ -130,6 +132,8 @@ def staged_files(
 ) -> tuple[list[tuple[str, Path]], dict[str, list[str]]]:
     """Replace oversized Parquet files with parts written under root/deposit-parts."""
     folder = root / "deposit-parts"
+    if folder.exists():
+        shutil.rmtree(folder)
     staged: list[tuple[str, Path]] = []
     parts: dict[str, list[str]] = {}
     for name, path in deposit_files(root):
