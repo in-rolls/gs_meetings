@@ -160,8 +160,9 @@ coverage between the earliest and latest observations.
   `fetch_error` or `not_requested` and carries the edition, financial year, state
   and local body, and `feedback_coverage.parquet` counts these outcomes per
   GP-year. Only `fetch_error` rows are source errors and need
-  `--allow-source-errors`. A form that exists but was never filled in is exported
-  as a report with `report_available = false` and counted as `unfilled_forms`.
+  `--allow-source-errors`. A form that exists but has neither a date nor any
+  attendance count is exported as a report with `report_available = false`, and
+  the coverage table counts such forms as `unfilled_forms`.
 - Parent and child reports are fetched at different times. Their differences are
   reported explicitly; matching totals alone do not establish full GP coverage.
 - The portal omits state codes 4 and 7 from its displayed state table. Raw state
@@ -272,8 +273,10 @@ uv run gs-meetings upload --root data --publish
 ```
 
 `upload` creates a draft deposition the first time and records its ID in
-`data/zenodo.json`; later runs reuse the draft, replace files whose checksum
-changed, and skip the rest. Every `*/tables/*` file is uploaded with its stage
+`data/zenodo.json` (`data/zenodo-sandbox.json` with `--sandbox`) before uploading
+anything, so an interrupted run resumes into the same draft. Later runs reuse the
+draft, replace files whose checksum changed, and skip the rest. Files removed
+locally stay in the draft; delete them on Zenodo before publishing. Every `*/tables/*` file is uploaded with its stage
 as a prefix, and files under `data/deposit/` (such as a copy of `SCHEMA.md`)
 are uploaded as they are. The token comes from `ZENODO_TOKEN`
 (`ZENODO_SANDBOX_TOKEN` with `--sandbox`) or from `[zenodo] api_token` in

@@ -131,16 +131,22 @@ def load_meeting_keys(db: sqlite3.Connection, meetings_root: Path) -> None:
         "PRIMARY KEY(source_url,row_ordinal))"
     )
     for batch in pq.ParquetFile(path).iter_batches(columns=columns):
-        db.executemany(
-            "INSERT INTO meeting_keys VALUES (?,?,?,?,?,?,?,?)",
-            (
-                tuple(
-                    value.isoformat() if isinstance(value, date) else value
-                    for value in (row[name] for name in columns)
-                )
-                for row in batch.to_pylist()
-            ),
-        )
+        try:
+            db.executemany(
+                "INSERT INTO meeting_keys VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    tuple(
+                        value.isoformat() if isinstance(value, date) else value
+                        for value in (row[name] for name in columns)
+                    )
+                    for row in batch.to_pylist()
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(
+                "The meetings export repeats a (source_url, row_ordinal) key; "
+                "rerun the meetings export"
+            ) from exc
     unmatched = db.execute(
         "SELECT count(*) FROM feedback_links l LEFT JOIN meeting_keys m "
         "ON l.meeting_url=m.source_url AND l.row_ordinal=m.row_ordinal "
@@ -150,6 +156,16 @@ def load_meeting_keys(db: sqlite3.Connection, meetings_root: Path) -> None:
         raise ValueError(
             f"The meetings export does not cover {unmatched} linked listing rows; "
             "rerun the meetings export"
+        )
+    unlinked = db.execute(
+        "SELECT count(*) FROM meeting_keys m LEFT JOIN feedback_links l "
+        "ON l.meeting_url=m.source_url AND l.row_ordinal=m.row_ordinal "
+        "WHERE l.meeting_url IS NULL"
+    ).fetchone()[0]
+    if unlinked:
+        raise ValueError(
+            f"The meetings export has {unlinked} listing rows that feedback "
+            "seeding never saw; rerun feedback collection"
         )
 
 
@@ -235,6 +251,7 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
     outcomes, absent_by_state = Counter(), Counter()
     coverage: dict[tuple, Counter] = {}
     reported_urls: dict[tuple, set] = {}
+    unfilled_urls: dict[tuple, set] = {}
     errors = []
     with ExitStack() as stack:
         writers = {
@@ -347,8 +364,9 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
                 }[row["outcome"]]
             ] += 1
             if row["outcome"] == "report":
-                tally["unfilled_forms"] += int(not row["report_available"])
                 reported_urls.setdefault(gp_year, set()).add(row["feedback_url"])
+                if not row["report_available"]:
+                    unfilled_urls.setdefault(gp_year, set()).add(row["feedback_url"])
             row["date_match"] = matching_date(
                 row["expected_date"], row["reported_date"]
             )
@@ -363,6 +381,7 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
         for gp_year in sorted(coverage, key=lambda key: tuple(map(str, key))):
             tally = coverage[gp_year]
             tally["distinct_reports"] = len(reported_urls.get(gp_year, ()))
+            tally["unfilled_forms"] = len(unfilled_urls.get(gp_year, ()))
             add(
                 "feedback_coverage",
                 {

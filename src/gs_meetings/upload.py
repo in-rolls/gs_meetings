@@ -103,14 +103,18 @@ def deposit(
     publish: bool = False,
     deposition_id: int | None = None,
 ) -> dict:
-    """Create or update the draft named in root/zenodo.json and upload changed files."""
+    """Create or reuse the draft named in root/zenodo.json and upload changed files.
+
+    The draft's identity is saved as soon as it exists so that an interrupted
+    upload resumes into the same deposition instead of stranding it.
+    """
     base_url = base_url or HOSTS[sandbox]
     version = version or package_version("gs-meetings")
     files = deposit_files(root)
     if session is None:
         session = requests.Session()
         session.headers["Authorization"] = f"Bearer {load_token(sandbox=sandbox)}"
-    state_path = root / "zenodo.json"
+    state_path = root / ("zenodo-sandbox.json" if sandbox else "zenodo.json")
     if deposition_id is None and state_path.is_file():
         state = json.loads(state_path.read_text())
         if state.get("base_url") == base_url:
@@ -122,6 +126,16 @@ def deposit(
         record = response.json()
         deposition_id = record["id"]
         LOG.info("Created draft deposition %s", deposition_id)
+        atomic_json(
+            state_path,
+            {
+                "deposition_id": deposition_id,
+                "doi": record["metadata"].get("prereserve_doi", {}).get("doi"),
+                "html": record["links"]["html"],
+                "base_url": base_url,
+                "published": False,
+            },
+        )
     else:
         response = session.get(f"{endpoint}/{deposition_id}", timeout=TIMEOUT)
         checked(response)

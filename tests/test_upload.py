@@ -59,9 +59,13 @@ class Session:
         self.calls.append(("GET", url))
         return self.response(200, self.deposition())
 
+    fail_after = None
+
     def put(self, url, data=None, json=None, timeout=None):
         self.calls.append(("PUT", url))
         if "/api/files/" in url:
+            if self.fail_after is not None and len(self.files) >= self.fail_after:
+                return self.response(500, {"message": "connection reset"})
             self.files[url.rsplit("/", 1)[1]] = data.read()
             return self.response(201, {})
         self.metadata = json["metadata"]
@@ -152,3 +156,30 @@ def test_token_comes_from_the_environment_or_the_config_file(tmp_path, monkeypat
     assert load_token(sandbox=True, config=config) == "box"
     monkeypatch.setenv("ZENODO_SANDBOX_TOKEN", "env")
     assert load_token(sandbox=True, config=config) == "env"
+
+
+def test_failed_upload_keeps_the_draft_so_a_retry_reuses_it(tmp_path):
+    session = Session()
+    session.fail_after = 1
+    root = tables(tmp_path)
+    with pytest.raises(ValueError, match="connection reset"):
+        deposit(root, session=session, base_url=BASE, version="0.3.0")
+    saved = json.loads((root / "zenodo.json").read_text())
+    assert saved["deposition_id"] == 41
+    assert saved["published"] is False
+    session.fail_after = None
+    session.calls.clear()
+    report = deposit(root, session=session, base_url=BASE, version="0.3.0")
+    assert ("POST", f"{BASE}/api/deposit/depositions") not in session.calls
+    assert report["uploaded"] == 4
+    assert report["skipped"] == 1
+
+
+def test_sandbox_state_never_overwrites_the_live_deposition(tmp_path):
+    root = tables(tmp_path)
+    deposit(root, session=Session(), base_url="https://zenodo.org", version="1")
+    deposit(root, session=Session(), base_url=BASE, sandbox=True, version="1")
+    live = json.loads((root / "zenodo.json").read_text())
+    box = json.loads((root / "zenodo-sandbox.json").read_text())
+    assert live["base_url"] == "https://zenodo.org"
+    assert box["base_url"] == BASE

@@ -3,8 +3,11 @@
 import gzip
 import hashlib
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -400,10 +403,8 @@ def test_only_absent_forms_do_not_require_the_source_error_override(tmp_path):
     assert report["all_discovered_requests_succeeded"] is True
     assert report["source_errors"] == []
     assert report["outcomes"] == {"report": 1, "form_absent": 1}
-    db = open_queue(target, seed_summaries=False)
-    db.execute("UPDATE requests SET status='pending' WHERE status='error'")
-    db.commit()
-    db.close()
+    with closing(sqlite3.connect(target / "collection.sqlite")) as db, db:
+        db.execute("UPDATE requests SET status='running' WHERE status='error'")
     with pytest.raises(ValueError, match="incomplete"):
         export_feedback(target)
 
@@ -418,11 +419,50 @@ def test_feedback_export_requires_the_matching_meetings_export(tmp_path):
     meetings = source / "tables/meetings.parquet"
     exported = pq.read_table(meetings)
     pq.write_table(exported.slice(0, 0), meetings)
-    with pytest.raises(ValueError, match="meetings export"):
+    with pytest.raises(ValueError, match="does not cover 1 linked"):
+        export_feedback(target)
+    pq.write_table(pa.concat_tables([exported, exported]), meetings)
+    with pytest.raises(ValueError, match="repeats"):
+        export_feedback(target)
+    extra = exported.to_pylist()[0] | {"row_ordinal": 2}
+    pq.write_table(
+        pa.Table.from_pylist([*exported.to_pylist(), extra], schema=exported.schema),
+        meetings,
+    )
+    with pytest.raises(ValueError, match="1 listing rows that feedback"):
         export_feedback(target)
     meetings.unlink()
-    with pytest.raises(ValueError, match="meetings export"):
+    with pytest.raises(ValueError, match="Run the meetings export"):
         export_feedback(target)
+
+
+def test_unfilled_forms_count_forms_not_the_rows_that_share_them(tmp_path):
+    rows = [
+        {"id": 1, "code": 27783, "name": "A", "gram_sabha_date": "22-11-2024"},
+        {"id": 2, "code": 27783, "name": "A", "gram_sabha_date": "22-11-2024"},
+        {"id": 3, "code": 27783, "name": "A", "gram_sabha_date": "22-11-2024"},
+    ]
+    _, target = seeded_feedback_queue(tmp_path, rows)
+    resolve_feedback(target, {"27783": ("done", BLANK_FORM)})
+    report = export_feedback(target)
+    assert report["issues"]["unpopulated_forms"] == 1
+    coverage = pq.read_table(target / "tables/feedback_coverage.parquet").to_pylist()
+    assert coverage == [
+        {
+            "edition": "current",
+            "financial_year": "2024-2025",
+            "state_code": "6",
+            "report_scope": "G",
+            "local_body_code": "27783",
+            "listed_meetings": 3,
+            "reports": 3,
+            "forms_absent": 0,
+            "fetch_errors": 0,
+            "not_requested": 0,
+            "unfilled_forms": 1,
+            "distinct_reports": 1,
+        }
+    ]
 
 
 def test_oldest_feedback_link_omits_date_and_keeps_missing_parent_names():

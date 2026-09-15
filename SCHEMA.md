@@ -151,10 +151,13 @@ it as a GP-level signal.
 
 `feedback_coverage.parquet` has one row per (`edition`, `financial_year`,
 `state_code`, `report_scope`, `local_body_code`) with `listed_meetings`, `reports`,
-`forms_absent`, `fetch_errors`, `not_requested`, `unfilled_forms` (captured forms
-with no date filled in) and `distinct_reports` (distinct report URLs, since one
-report can be linked from several listing rows). `listed_meetings` counts listing
-rows, not deduplicated events. Archive editions have a null `financial_year`.
+`forms_absent`, `fetch_errors`, `not_requested`, `distinct_reports` and
+`unfilled_forms`. The first five count listing rows, so `listed_meetings` is not a
+deduplicated event count. `distinct_reports` counts distinct captured report URLs,
+because one report can be linked from several listing rows (every row of a GP in
+the 2018 archive shares one URL). `unfilled_forms` counts the distinct captured
+forms with neither a meeting date nor any attendance count, the forms whose
+`report_available` is false. Archive editions have a null `financial_year`.
 
 The 2018 feedback URL omits the meeting date; later archives and the current
 portal use different URL parameters. The report's own date is always retained and
