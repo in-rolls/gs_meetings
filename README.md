@@ -1,6 +1,7 @@
 # Gram Sabha participation reports
 
 [![CI](https://github.com/in-rolls/gs_meetings/actions/workflows/ci.yml/badge.svg)](https://github.com/in-rolls/gs_meetings/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/in-rolls/gs_meetings)](https://github.com/in-rolls/gs_meetings/releases)
 
 Collect and standardize the Ministry of Panchayati Raj's reports on Gram Sabhas
 held under the People's Plan Campaign. The reports summarize participation and
@@ -14,7 +15,8 @@ The summary snapshot captured on 2026-09-11 contains **1,242,582 GP-by-edition r
 live report and four archives. It includes explicit source coverage gaps.
 The dated collection contains **2,424,299 listing rows**. These are source entries,
 not a deduplicated count of meetings. Individual facilitator reports are still
-downloading. Output stays under `data/`; no Dataverse deposit has been published.
+downloading. Output stays under `data/`. The tables will be deposited on Zenodo
+with the data release; until that DOI exists, cite the portal and capture date.
 
 | Summary edition | GP/TLB records |
 |---|---:|
@@ -146,21 +148,20 @@ coverage between the earliest and latest observations.
   it without relabelling it as either distinct GPs or a verified meeting count.
 - A zero report can reflect no submitted feedback; it is not proof that no meeting
   occurred. Empty arrays are saved but reported as coverage requiring investigation.
-- Many listed meetings have no facilitator report: the report URL returns the
+- Many listed meetings have no facilitator report. The report URL returns the
   portal's own "500 Internal Server Error" page with HTTP status 200 and no form.
-  This is a stable property of the meeting, not a transient failure (re-fetching
-  returns the same page), and its cause on the portal side is unknown. It is very
-  unevenly distributed: in the 2026-09 collection about 42% of Maharashtra's listed
-  current-edition meetings had no report against about 1% for Uttar Pradesh, so the
-  state and year structure has to be in view before reading it as a signal about
-  individual GPs. It is plausibly informative all the same, so the export keeps it
-  as an outcome rather than an error: `feedback_links.parquet` labels every listing
-  row `report`, `form_absent`, `fetch_error` or `not_requested` and carries the
-  edition, financial year, state and local body, and `feedback_coverage.parquet`
-  counts these outcomes per GP-year. Only `fetch_error` rows are source errors and
-  need `--allow-source-errors`. A form that exists but was never filled in is a
-  separate case, exported as a report with `report_available = false` and counted
-  as `unfilled_forms`.
+  Re-fetching returns the same page, so this is a property of the meeting rather
+  than a transient failure; the cause on the portal side is unknown. The rate
+  varies sharply by state: in the 2026-09 collection about 42% of Maharashtra's
+  listed current-edition meetings had no report, against about 1% in Uttar
+  Pradesh. Compare rates within state and year before reading a missing report as
+  a fact about one GP. The export keeps it as an outcome, not an error:
+  `feedback_links.parquet` labels every listing row `report`, `form_absent`,
+  `fetch_error` or `not_requested` and carries the edition, financial year, state
+  and local body, and `feedback_coverage.parquet` counts these outcomes per
+  GP-year. Only `fetch_error` rows are source errors and need
+  `--allow-source-errors`. A form that exists but was never filled in is exported
+  as a report with `report_available = false` and counted as `unfilled_forms`.
 - Parent and child reports are fetched at different times. Their differences are
   reported explicitly; matching totals alone do not establish full GP coverage.
 - The portal omits state codes 4 and 7 from its displayed state table. Raw state
@@ -261,6 +262,24 @@ and complete geographic coverage are different claims. The feedback export needs
 the flag only for transport failures; the portal's stable no-form response is an
 exported outcome (see "Coverage and interpretation"), not a source error.
 
+Exported tables are deposited on Zenodo in two steps, because the record cannot
+be changed once published:
+
+```sh
+uv run gs-meetings upload --root data --sandbox
+uv run gs-meetings upload --root data
+uv run gs-meetings upload --root data --publish
+```
+
+`upload` creates a draft deposition the first time and records its ID in
+`data/zenodo.json`; later runs reuse the draft, replace files whose checksum
+changed, and skip the rest. Every `*/tables/*` file is uploaded with its stage
+as a prefix, and files under `data/deposit/` (such as a copy of `SCHEMA.md`)
+are uploaded as they are. The token comes from `ZENODO_TOKEN`
+(`ZENODO_SANDBOX_TOKEN` with `--sandbox`) or from `[zenodo] api_token` in
+`~/.config/zenodo.ini`. The record's version is the installed package version.
+`--publish` is the irreversible step.
+
 Feedback collection can begin while dated listings are downloading. Repeat it
 after the dated stage finishes to add the remaining reports. Feedback export checks
 that all completed dated listings have been processed. In the 2018 archive, a
@@ -330,7 +349,8 @@ uv run pre-commit run --all-files
 ## Citation
 
 Cite the Ministry of Panchayati Raj's report URL, edition and capture date for the
-data, and [CITATION.cff](CITATION.cff) for this software. There is no dataset DOI.
+data, and [CITATION.cff](CITATION.cff) for this software. The dataset DOI will be
+added here when the Zenodo record is published.
 The original source notes remain available at commit
 [`3d95a90`](https://github.com/in-rolls/gs_meetings/tree/3d95a90).
 

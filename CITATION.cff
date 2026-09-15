@@ -1,6 +1,8 @@
 cff-version: 1.2.0
 message: "Please cite this software and the official report URL and capture date."
 type: software
+version: "0.3.0"
+date-released: 2026-09-15
 title: "Gram Sabha participation reports"
 authors:
   - family-names: Sood
