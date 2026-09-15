@@ -4,6 +4,8 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from gs_meetings.upload import deposit, load_token
@@ -60,12 +62,17 @@ class Session:
         return self.response(200, self.deposition())
 
     fail_after = None
+    flaky = 0
 
     def put(self, url, data=None, json=None, timeout=None):
         self.calls.append(("PUT", url))
         if "/api/files/" in url:
             if self.fail_after is not None and len(self.files) >= self.fail_after:
                 return self.response(500, {"message": "connection reset"})
+            if self.flaky:
+                self.flaky -= 1
+                data.read()
+                return self.response(502, {"message": "Bad Gateway"})
             self.files[url.rsplit("/", 1)[1]] = data.read()
             return self.response(201, {})
         self.metadata = json["metadata"]
@@ -163,7 +170,7 @@ def test_failed_upload_keeps_the_draft_so_a_retry_reuses_it(tmp_path):
     session.fail_after = 1
     root = tables(tmp_path)
     with pytest.raises(ValueError, match="connection reset"):
-        deposit(root, session=session, base_url=BASE, version="0.3.0")
+        deposit(root, session=session, base_url=BASE, version="0.3.0", backoff=0)
     saved = json.loads((root / "zenodo.json").read_text())
     assert saved["deposition_id"] == 41
     assert saved["published"] is False
@@ -183,3 +190,38 @@ def test_sandbox_state_never_overwrites_the_live_deposition(tmp_path):
     box = json.loads((root / "zenodo-sandbox.json").read_text())
     assert live["base_url"] == "https://zenodo.org"
     assert box["base_url"] == BASE
+
+
+def test_large_parquet_files_are_split_into_parts_under_the_limit(tmp_path):
+    root = tables(tmp_path)
+    table = pa.table({"n": list(range(30000)), "s": ["x" * 40] * 30000})
+    path = root / "meetings/tables/meetings.parquet"
+    with pq.ParquetWriter(path, table.schema) as writer:
+        for start in range(0, 30000, 5000):
+            writer.write_table(table.slice(start, 5000))
+    session = Session()
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=100_000
+    )
+    parts = sorted(name for name in session.files if "meetings-meetings" in name)
+    assert len(parts) > 1
+    assert parts == [
+        f"meetings-meetings-{i:02d}.parquet" for i in range(1, len(parts) + 1)
+    ]
+    assert "meetings-meetings.parquet" not in session.files
+    rebuilt = pa.concat_tables(
+        [pq.read_table(pa.BufferReader(session.files[name])) for name in parts]
+    )
+    assert rebuilt.equals(table)
+    assert all(len(session.files[name]) <= 100_000 * 1.5 for name in parts)
+    assert report["parts"] == {"meetings-meetings.parquet": parts}
+
+
+def test_a_failed_put_is_retried_from_the_start_of_the_file(tmp_path):
+    root = tables(tmp_path)
+    session = Session()
+    session.flaky = 2
+    report = deposit(root, session=session, base_url=BASE, version="1", backoff=0)
+    assert report["uploaded"] == 5
+    assert session.files["SCHEMA.md"] == b"# Tables\n"
+    assert sum(1 for kind, url in session.calls if "/api/files/" in url) == 7
