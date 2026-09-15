@@ -11,8 +11,24 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from gs_meetings.feedback import ATTENDANCE, BOOLEAN_QUESTIONS, parse_feedback
+from gs_meetings.feedback import (
+    ATTENDANCE,
+    BOOLEAN_QUESTIONS,
+    FORM_ABSENT,
+    parse_feedback,
+)
 from gs_meetings.fetch import atomic_json, read_capture
+
+GP_YEAR = ["edition", "financial_year", "state_code", "report_scope", "local_body_code"]
+COVERAGE_COUNTS = [
+    "listed_meetings",
+    "reports",
+    "forms_absent",
+    "fetch_errors",
+    "not_requested",
+    "unfilled_forms",
+    "distinct_reports",
+]
 
 SCHEMAS = {
     "feedback": pa.schema(
@@ -64,23 +80,77 @@ SCHEMAS = {
             (name, pa.string())
             for name in [
                 "meeting_url",
+                *GP_YEAR,
                 "feedback_url",
+                "outcome",
                 "expected_date",
                 "expected_type",
                 "issue",
                 "request_status",
+                "request_error",
                 "reported_date",
                 "reported_type",
             ]
         ]
         + [
             ("row_ordinal", pa.int64()),
+            ("meeting_date", pa.date32()),
             ("date_match", pa.bool_()),
             ("type_match", pa.bool_()),
             ("same_report_for_multiple_rows", pa.bool_()),
         ]
     ),
+    "feedback_coverage": pa.schema(
+        [(name, pa.string()) for name in GP_YEAR]
+        + [(name, pa.int64()) for name in COVERAGE_COUNTS]
+    ),
 }
+
+
+def outcome(status: str | None, error: str | None) -> str:
+    """Separate the portal's stable no-form response from transport failures."""
+    if status is None:
+        return "not_requested"
+    if status == "done":
+        return "report"
+    if error == FORM_ABSENT:
+        return "form_absent"
+    return "fetch_error"
+
+
+def load_meeting_keys(db: sqlite3.Connection, meetings_root: Path) -> None:
+    """Stage the GP-year identity of every exported dated listing row for joins."""
+    path = meetings_root / "tables" / "meetings.parquet"
+    if not path.is_file():
+        raise ValueError("Run the meetings export before the feedback export")
+    columns = ["source_url", "row_ordinal", *GP_YEAR, "meeting_date"]
+    db.execute(
+        "CREATE TEMP TABLE meeting_keys (source_url TEXT, row_ordinal INTEGER, "
+        "edition TEXT, financial_year TEXT, state_code TEXT, report_scope TEXT, "
+        "local_body_code TEXT, meeting_date TEXT, "
+        "PRIMARY KEY(source_url,row_ordinal))"
+    )
+    for batch in pq.ParquetFile(path).iter_batches(columns=columns):
+        db.executemany(
+            "INSERT INTO meeting_keys VALUES (?,?,?,?,?,?,?,?)",
+            (
+                tuple(
+                    value.isoformat() if isinstance(value, date) else value
+                    for value in (row[name] for name in columns)
+                )
+                for row in batch.to_pylist()
+            ),
+        )
+    unmatched = db.execute(
+        "SELECT count(*) FROM feedback_links l LEFT JOIN meeting_keys m "
+        "ON l.meeting_url=m.source_url AND l.row_ordinal=m.row_ordinal "
+        "WHERE m.source_url IS NULL"
+    ).fetchone()[0]
+    if unmatched:
+        raise ValueError(
+            f"The meetings export does not cover {unmatched} linked listing rows; "
+            "rerun the meetings export"
+        )
 
 
 def matching_type(expected: str | None, observed: str | None) -> bool | None:
@@ -124,13 +194,23 @@ def export_feedback(root: Path, *, allow_source_errors: bool = False) -> dict:
         groups = dict(
             db.execute("SELECT status,count(*) FROM requests GROUP BY status")
         )
-        if not groups or set(groups) - allowed:
+        if not groups or set(groups) - {"done", "error"}:
             raise ValueError("Feedback collection is incomplete")
+        fetch_errors = db.execute(
+            "SELECT count(*) FROM requests WHERE status='error' AND error IS NOT ?",
+            (FORM_ABSENT,),
+        ).fetchone()[0]
+        if fetch_errors and not allow_source_errors:
+            raise ValueError(
+                f"{fetch_errors} feedback requests failed; "
+                "rerun collection or export with source errors allowed"
+            )
         seeded = db.execute("SELECT count(*) FROM seeded_reports").fetchone()[0]
         if seeded != source_groups.get("done", 0):
             raise ValueError(
                 "Rerun feedback collection to seed the remaining dated reports"
             )
+        load_meeting_keys(db, source_root)
         return write_feedback(db, root, source_groups)
 
 
@@ -141,8 +221,8 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
     for name in ["manifest.json", "CHECKSUMS"]:
         (output / name).unlink(missing_ok=True)
     db.execute(
-        "CREATE TEMP TABLE parsed_feedback "
-        "(url TEXT PRIMARY KEY, reported_date TEXT, reported_type TEXT)"
+        "CREATE TEMP TABLE parsed_feedback (url TEXT PRIMARY KEY, "
+        "reported_date TEXT, reported_type TEXT, report_available INTEGER)"
     )
     db.execute(
         "CREATE TEMP TABLE link_counts AS SELECT feedback_url, count(*) AS n "
@@ -152,6 +232,9 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
     buffers = {name: [] for name in SCHEMAS}
     counts, issues = Counter(), Counter()
     missing_counts = Counter()
+    outcomes, absent_by_state = Counter(), Counter()
+    coverage: dict[tuple, Counter] = {}
+    reported_urls: dict[tuple, set] = {}
     errors = []
     with ExitStack() as stack:
         writers = {
@@ -174,7 +257,8 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
 
         for task in db.execute("SELECT * FROM requests ORDER BY url"):
             if task["status"] == "error":
-                errors.append({"url": task["url"], "error": task["error"]})
+                if task["error"] != FORM_ABSENT:
+                    errors.append({"url": task["url"], "error": task["error"]})
                 continue
             key = hashlib.sha256(task["url"].encode()).hexdigest()
             capture = read_capture(
@@ -205,8 +289,13 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
                 raise ValueError("Capture timestamp must include a time zone")
             add("feedback", row)
             db.execute(
-                "INSERT INTO parsed_feedback VALUES (?,?,?)",
-                (task["url"], record["meeting_date_raw"], record["feedback_type"]),
+                "INSERT INTO parsed_feedback VALUES (?,?,?,?)",
+                (
+                    task["url"],
+                    record["meeting_date_raw"],
+                    record["feedback_type"],
+                    int(record["report_available"]),
+                ),
             )
             for ordinal, answer in enumerate(json.loads(record["answers"]), start=1):
                 add(
@@ -226,14 +315,40 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
             for field in ATTENDANCE.values():
                 missing_counts[field] += int(record[field] is None)
         links = db.execute(
-            "SELECT l.*,r.status AS request_status,p.reported_date,p.reported_type,c.n "
-            "FROM feedback_links l LEFT JOIN requests r ON l.feedback_url=r.url "
+            "SELECT l.*,r.status AS request_status,r.error AS request_error,"
+            "p.reported_date,p.reported_type,p.report_available,c.n,"
+            "m.edition,m.financial_year,m.state_code,m.report_scope,"
+            "m.local_body_code,m.meeting_date FROM feedback_links l "
+            "JOIN meeting_keys m "
+            "ON l.meeting_url=m.source_url AND l.row_ordinal=m.row_ordinal "
+            "LEFT JOIN requests r ON l.feedback_url=r.url "
             "LEFT JOIN parsed_feedback p ON l.feedback_url=p.url "
             "LEFT JOIN link_counts c ON l.feedback_url=c.feedback_url "
             "ORDER BY l.meeting_url,l.row_ordinal"
         )
         for link in links:
             row = dict(link)
+            row["meeting_date"] = (
+                date.fromisoformat(row["meeting_date"]) if row["meeting_date"] else None
+            )
+            row["outcome"] = outcome(row["request_status"], row["request_error"])
+            outcomes[(row["edition"], row["outcome"])] += 1
+            if row["outcome"] == "form_absent":
+                absent_by_state[row["state_code"]] += 1
+            gp_year = tuple(row[key] for key in GP_YEAR)
+            tally = coverage.setdefault(gp_year, Counter())
+            tally["listed_meetings"] += 1
+            tally[
+                {
+                    "report": "reports",
+                    "form_absent": "forms_absent",
+                    "fetch_error": "fetch_errors",
+                    "not_requested": "not_requested",
+                }[row["outcome"]]
+            ] += 1
+            if row["outcome"] == "report":
+                tally["unfilled_forms"] += int(not row["report_available"])
+                reported_urls.setdefault(gp_year, set()).add(row["feedback_url"])
             row["date_match"] = matching_date(
                 row["expected_date"], row["reported_date"]
             )
@@ -245,6 +360,16 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
             issues["type_mismatches"] += int(row["type_match"] is False)
             issues["ambiguous_link_rows"] += int(row["same_report_for_multiple_rows"])
             add("feedback_links", row)
+        for gp_year in sorted(coverage, key=lambda key: tuple(map(str, key))):
+            tally = coverage[gp_year]
+            tally["distinct_reports"] = len(reported_urls.get(gp_year, ()))
+            add(
+                "feedback_coverage",
+                {
+                    **dict(zip(GP_YEAR, gp_year, strict=True)),
+                    **{name: tally[name] for name in COVERAGE_COUNTS},
+                },
+            )
         for name, rows in buffers.items():
             if rows:
                 writers[name].write_table(
@@ -252,16 +377,28 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
                 )
     for name in SCHEMAS:
         (output / f"{name}.parquet.part").replace(output / f"{name}.parquet")
+    by_edition: dict[str, dict[str, int]] = {}
+    for (edition, name), n in sorted(outcomes.items()):
+        by_edition.setdefault(edition, {})[name] = n
     report = {
         "rows": dict(counts),
         "issues": dict(issues),
         "missing_attendance_counts": dict(missing_counts),
+        "outcomes": dict(sum((Counter(v) for v in by_edition.values()), Counter())),
+        "outcomes_by_edition": by_edition,
+        "forms_absent_by_state": dict(sorted(absent_by_state.items())),
         "source_errors": errors,
         "dated_source_requests": source_groups,
         "all_discovered_requests_succeeded": not errors
         and not source_groups.get("error"),
         "feedback_key": "source_url",
         "link_key": ["meeting_url", "row_ordinal"],
+        "coverage_key": GP_YEAR,
+        "outcome_rule": (
+            "form_absent is the portal's stable no-form response for a listed "
+            "meeting; fetch_error is a transport failure; not_requested is a "
+            "listing row without a usable date"
+        ),
         "join_rule": (
             "many-to-one by feedback_url; inspect date/type mismatches "
             "and repeated report links before attaching attendance"

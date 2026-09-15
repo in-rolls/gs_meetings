@@ -6,6 +6,8 @@ from datetime import date
 
 from bs4 import BeautifulSoup
 
+FORM_ABSENT = "Facilitator report form is absent"
+
 ATTENDANCE = {
     "people": "people_present",
     "SC's": "sc_present",
@@ -72,7 +74,7 @@ def parse_feedback(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     form = soup.find("form", id="FACILITATOR_MODEL")
     if form is None:
-        raise ValueError("Facilitator report form is absent")
+        raise ValueError(FORM_ABSENT)
     answers = []
     for node in form.find_all(["label", "div"]):
         if node.name == "div":

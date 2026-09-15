@@ -49,7 +49,8 @@ Facilitator reports are stored separately under `data/feedback/`:
 | `tables/feedback.parquet` | One report per source URL: reported date, attendance, discussion indicators, photo references and provenance |
 | `tables/feedback_answers.parquet` | Every question on the form with its text and yes/no answer |
 | `tables/feedback_tables.parquet` | Original table headers and typed cells, including departmental representatives and participation |
-| `tables/feedback_links.parquet` | Links to dated listing rows, with date/type comparisons and repeated-report flags |
+| `tables/feedback_links.parquet` | One row per dated listing row: its GP-year, whether a report, an absent form, a fetch error or no request resulted, and date/type comparisons |
+| `tables/feedback_coverage.parquet` | Per GP-year counts of listed meetings and each report outcome |
 
 Compressed raw responses, schema files, checksums and coverage manifests accompany
 each collection. The detailed reports take substantially longer to download than
@@ -145,6 +146,21 @@ coverage between the earliest and latest observations.
   it without relabelling it as either distinct GPs or a verified meeting count.
 - A zero report can reflect no submitted feedback; it is not proof that no meeting
   occurred. Empty arrays are saved but reported as coverage requiring investigation.
+- Many listed meetings have no facilitator report: the report URL returns the
+  portal's own "500 Internal Server Error" page with HTTP status 200 and no form.
+  This is a stable property of the meeting, not a transient failure (re-fetching
+  returns the same page), and its cause on the portal side is unknown. It is very
+  unevenly distributed: in the 2026-09 collection about 42% of Maharashtra's listed
+  current-edition meetings had no report against about 1% for Uttar Pradesh, so the
+  state and year structure has to be in view before reading it as a signal about
+  individual GPs. It is plausibly informative all the same, so the export keeps it
+  as an outcome rather than an error: `feedback_links.parquet` labels every listing
+  row `report`, `form_absent`, `fetch_error` or `not_requested` and carries the
+  edition, financial year, state and local body, and `feedback_coverage.parquet`
+  counts these outcomes per GP-year. Only `fetch_error` rows are source errors and
+  need `--allow-source-errors`. A form that exists but was never filled in is a
+  separate case, exported as a report with `report_available = false` and counted
+  as `unfilled_forms`.
 - Parent and child reports are fetched at different times. Their differences are
   reported explicitly; matching totals alone do not establish full GP coverage.
 - The portal omits state codes 4 and 7 from its displayed state table. Raw state
@@ -241,7 +257,9 @@ After retrying persistent source failures, each export command accepts
 `--allow-source-errors`. This writes the available records with every failed URL
 listed in the manifest; it never treats them as empty data or a successful request.
 Pending and running requests still prevent export. Successful request coverage
-and complete geographic coverage are different claims.
+and complete geographic coverage are different claims. The feedback export needs
+the flag only for transport failures; the portal's stable no-form response is an
+exported outcome (see "Coverage and interpretation"), not a source error.
 
 Feedback collection can begin while dated listings are downloading. Repeat it
 after the dated stage finishes to add the remaining reports. Feedback export checks
