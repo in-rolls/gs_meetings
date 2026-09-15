@@ -19,6 +19,7 @@ from gs_meetings.meetings import collect_meetings
 from gs_meetings.parse import convert
 from gs_meetings.pipeline import collect_all
 from gs_meetings.source import EDITIONS
+from gs_meetings.upload import deposit
 
 LOG = logging.getLogger(__name__)
 
@@ -78,6 +79,14 @@ def main(argv: list[str] | None = None) -> int:
     command = commands.add_parser("export-images")
     command.add_argument("--root", type=Path, default=Path("data/images"))
     command.add_argument("--allow-source-errors", action="store_true")
+    command = commands.add_parser(
+        "upload",
+        help="Deposit exported tables on Zenodo as a draft; --publish makes it public",
+    )
+    command.add_argument("--root", type=Path, default=Path("data"))
+    command.add_argument("--sandbox", action="store_true")
+    command.add_argument("--publish", action="store_true")
+    command.add_argument("--deposition", type=positive)
     for name in ["list", "fetch", "parse"]:
         command = commands.add_parser(name)
         command.add_argument("--root", type=Path, default=Path("data/current"))
@@ -100,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
                     for name in ["summaries", "meetings", "feedback"]
                 )
             )
+        if args.command == "upload":
+            report = deposit(
+                args.root,
+                sandbox=args.sandbox,
+                publish=args.publish,
+                deposition_id=args.deposition,
+            )
+            LOG.info("%s", json.dumps(report))
+            return 0
         if args.command == "collect-images":
             if args.dry_run:
                 plan = plan_images(args.root, args.feedback_root, args.seed_workers)

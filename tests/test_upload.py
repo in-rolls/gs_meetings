@@ -1,0 +1,185 @@
+"""Deposit exported tables on Zenodo as a draft first and publish only on request."""
+
+import hashlib
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from gs_meetings.upload import deposit, load_token
+
+BASE = "https://sandbox.zenodo.org"
+
+
+class Session:
+    """Record every deposition call and answer like the Zenodo REST API."""
+
+    def __init__(self):
+        self.calls = []
+        self.files = {}
+        self.metadata = None
+        self.published = False
+        self.headers = {}
+
+    def response(self, status, body):
+        return SimpleNamespace(
+            status_code=status,
+            ok=status < 300,
+            json=lambda: body,
+            text=json.dumps(body),
+            raise_for_status=lambda: None,
+        )
+
+    def deposition(self):
+        return {
+            "id": 41,
+            "metadata": {
+                **(self.metadata or {}),
+                "prereserve_doi": {"doi": "10.5072/zenodo.41"},
+            },
+            "links": {
+                "bucket": f"{BASE}/api/files/bucket-41",
+                "html": f"{BASE}/deposit/41",
+            },
+            "files": [
+                {"filename": name, "checksum": hashlib.md5(data).hexdigest()}  # noqa: S324
+                for name, data in self.files.items()
+            ],
+            "submitted": self.published,
+        }
+
+    def post(self, url, json=None, timeout=None):
+        self.calls.append(("POST", url))
+        if url.endswith("/actions/publish"):
+            self.published = True
+            return self.response(202, {**self.deposition(), "doi": "10.5072/zenodo.41"})
+        return self.response(201, self.deposition())
+
+    def get(self, url, timeout=None):
+        self.calls.append(("GET", url))
+        return self.response(200, self.deposition())
+
+    fail_after = None
+
+    def put(self, url, data=None, json=None, timeout=None):
+        self.calls.append(("PUT", url))
+        if "/api/files/" in url:
+            if self.fail_after is not None and len(self.files) >= self.fail_after:
+                return self.response(500, {"message": "connection reset"})
+            self.files[url.rsplit("/", 1)[1]] = data.read()
+            return self.response(201, {})
+        self.metadata = json["metadata"]
+        return self.response(200, self.deposition())
+
+
+def tables(tmp_path):
+    for stage in ["national", "meetings"]:
+        folder = tmp_path / stage / "tables"
+        folder.mkdir(parents=True)
+        (folder / f"{stage}.parquet").write_bytes(stage.encode())
+        (folder / "manifest.json").write_text("{}")
+    (tmp_path / "feedback" / "raw").mkdir(parents=True)
+    (tmp_path / "deposit").mkdir()
+    (tmp_path / "deposit" / "SCHEMA.md").write_text("# Tables\n")
+    return tmp_path
+
+
+def test_deposit_creates_a_draft_and_uploads_every_table_without_publishing(tmp_path):
+    session = Session()
+    root = tables(tmp_path)
+    report = deposit(root, session=session, base_url=BASE, version="0.3.0")
+    assert not session.published
+    assert ("POST", f"{BASE}/api/deposit/depositions") in session.calls
+    assert sorted(session.files) == [
+        "SCHEMA.md",
+        "meetings-manifest.json",
+        "meetings-meetings.parquet",
+        "national-manifest.json",
+        "national-national.parquet",
+    ]
+    assert session.metadata["upload_type"] == "dataset"
+    assert session.metadata["version"] == "0.3.0"
+    assert session.metadata["license"] == "cc0-1.0"
+    assert report["deposition_id"] == 41
+    assert report["doi"] == "10.5072/zenodo.41"
+    assert report["uploaded"] == 5
+    assert report["published"] is False
+    saved = json.loads((root / "zenodo.json").read_text())
+    assert saved["deposition_id"] == 41
+    assert saved["html"] == f"{BASE}/deposit/41"
+
+
+def test_deposit_reuses_the_draft_and_skips_unchanged_files(tmp_path):
+    session = Session()
+    root = tables(tmp_path)
+    deposit(root, session=session, base_url=BASE, version="0.3.0")
+    (root / "national/tables/national.parquet").write_bytes(b"changed")
+    (root / "feedback/tables").mkdir()
+    (root / "feedback/tables/feedback.parquet").write_bytes(b"new")
+    session.calls.clear()
+    report = deposit(root, session=session, base_url=BASE, version="0.3.1")
+    assert ("POST", f"{BASE}/api/deposit/depositions") not in session.calls
+    assert ("GET", f"{BASE}/api/deposit/depositions/41") in session.calls
+    uploads = [url.rsplit("/", 1)[1] for kind, url in session.calls if kind == "PUT"]
+    assert uploads == ["41", "feedback-feedback.parquet", "national-national.parquet"]
+    assert report["uploaded"] == 2
+    assert report["skipped"] == 4
+
+
+def test_publish_only_when_requested(tmp_path):
+    session = Session()
+    root = tables(tmp_path)
+    report = deposit(root, session=session, base_url=BASE, version="1.0", publish=True)
+    assert session.published
+    assert session.calls[-1] == (
+        "POST",
+        f"{BASE}/api/deposit/depositions/41/actions/publish",
+    )
+    assert report["published"] is True
+    with pytest.raises(ValueError, match="already published"):
+        deposit(root, session=session, base_url=BASE, version="1.0")
+
+
+def test_deposit_refuses_a_root_without_tables(tmp_path):
+    with pytest.raises(ValueError, match="No exported tables"):
+        deposit(tmp_path, session=Session(), base_url=BASE, version="0.3.0")
+
+
+def test_token_comes_from_the_environment_or_the_config_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("ZENODO_TOKEN", raising=False)
+    monkeypatch.delenv("ZENODO_SANDBOX_TOKEN", raising=False)
+    config = tmp_path / "zenodo.ini"
+    with pytest.raises(ValueError, match="ZENODO_TOKEN"):
+        load_token(sandbox=False, config=config)
+    config.write_text("[zenodo]\napi_token = live\nsandbox_api_token = box\n")
+    assert load_token(sandbox=False, config=config) == "live"
+    assert load_token(sandbox=True, config=config) == "box"
+    monkeypatch.setenv("ZENODO_SANDBOX_TOKEN", "env")
+    assert load_token(sandbox=True, config=config) == "env"
+
+
+def test_failed_upload_keeps_the_draft_so_a_retry_reuses_it(tmp_path):
+    session = Session()
+    session.fail_after = 1
+    root = tables(tmp_path)
+    with pytest.raises(ValueError, match="connection reset"):
+        deposit(root, session=session, base_url=BASE, version="0.3.0")
+    saved = json.loads((root / "zenodo.json").read_text())
+    assert saved["deposition_id"] == 41
+    assert saved["published"] is False
+    session.fail_after = None
+    session.calls.clear()
+    report = deposit(root, session=session, base_url=BASE, version="0.3.0")
+    assert ("POST", f"{BASE}/api/deposit/depositions") not in session.calls
+    assert report["uploaded"] == 4
+    assert report["skipped"] == 1
+
+
+def test_sandbox_state_never_overwrites_the_live_deposition(tmp_path):
+    root = tables(tmp_path)
+    deposit(root, session=Session(), base_url="https://zenodo.org", version="1")
+    deposit(root, session=Session(), base_url=BASE, sandbox=True, version="1")
+    live = json.loads((root / "zenodo.json").read_text())
+    box = json.loads((root / "zenodo-sandbox.json").read_text())
+    assert live["base_url"] == "https://zenodo.org"
+    assert box["base_url"] == BASE

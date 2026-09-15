@@ -139,6 +139,26 @@ unmatched rows. Inspect `date_match`, `type_match` and
 `same_report_for_multiple_rows` before assigning attendance to individual meetings.
 Neither repeated observations nor repeated report links are silently collapsed.
 
+Each link row repeats the listing's `edition`, `financial_year`, `state_code`,
+`report_scope`, `local_body_code` and `meeting_date` from `meetings.parquet`, and
+records an `outcome`: `report` (the form was captured), `form_absent` (the portal
+returned its HTTP-200 "500" page without a form, which is stable on re-fetch),
+`fetch_error` (a transport failure, retained with its `request_error` text) or
+`not_requested` (no usable date, so no report URL). `form_absent` is a property
+of the listed meeting on the portal, not evidence that no meeting occurred, and it
+is strongly clustered by state; compare rates within state and year before reading
+it as a GP-level signal.
+
+`feedback_coverage.parquet` has one row per (`edition`, `financial_year`,
+`state_code`, `report_scope`, `local_body_code`) with `listed_meetings`, `reports`,
+`forms_absent`, `fetch_errors`, `not_requested`, `distinct_reports` and
+`unfilled_forms`. The first five count listing rows, so `listed_meetings` is not a
+deduplicated event count. `distinct_reports` counts distinct captured report URLs,
+because one report can be linked from several listing rows (every row of a GP in
+the 2018 archive shares one URL). `unfilled_forms` counts the distinct captured
+forms with neither a meeting date nor any attendance count, the forms whose
+`report_available` is false. Archive editions have a null `financial_year`.
+
 The 2018 feedback URL omits the meeting date; later archives and the current
 portal use different URL parameters. The report's own date is always retained and
 compared with the listing. Date comparison accepts equivalent display padding,
