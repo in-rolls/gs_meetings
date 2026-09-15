@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import requests
 
 from gs_meetings.upload import deposit, load_token
 
@@ -63,12 +64,16 @@ class Session:
 
     fail_after = None
     flaky = 0
+    aborts = 0
 
     def put(self, url, data=None, json=None, timeout=None):
         self.calls.append(("PUT", url))
         if "/api/files/" in url:
             if self.fail_after is not None and len(self.files) >= self.fail_after:
                 return self.response(500, {"message": "connection reset"})
+            if self.aborts:
+                self.aborts -= 1
+                raise requests.ConnectionError("Connection aborted")
             if self.flaky:
                 self.flaky -= 1
                 data.read()
@@ -225,3 +230,15 @@ def test_a_failed_put_is_retried_from_the_start_of_the_file(tmp_path):
     assert report["uploaded"] == 5
     assert session.files["SCHEMA.md"] == b"# Tables\n"
     assert sum(1 for kind, url in session.calls if "/api/files/" in url) == 7
+
+
+def test_a_dropped_connection_is_retried_like_a_gateway_error(tmp_path):
+    root = tables(tmp_path)
+    session = Session()
+    session.aborts = 3
+    report = deposit(root, session=session, base_url=BASE, version="1", backoff=0)
+    assert report["uploaded"] == 5
+    session = Session()
+    session.aborts = 4
+    with pytest.raises(requests.ConnectionError):
+        deposit(root, session=session, base_url=BASE, version="1", backoff=0)
