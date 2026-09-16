@@ -1,6 +1,6 @@
 [project]
 name = "gs-meetings"
-version = "0.3.0"
+version = "0.3.1"
 description = "Collect and parse official Gram Sabha participation reports"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,6 +21,7 @@ dependencies = [
 Repository = "https://github.com/in-rolls/gs_meetings"
 Issues = "https://github.com/in-rolls/gs_meetings/issues"
 Source = "https://gpdp.nic.in/summaryAnalysisReport.html"
+Data = "https://doi.org/10.5281/zenodo.22772026"
 
 [project.scripts]
 gs-meetings = "gs_meetings.cli:main"

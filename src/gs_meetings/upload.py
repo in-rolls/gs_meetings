@@ -106,36 +106,53 @@ def deposit_files(root: Path) -> list[tuple[str, Path]]:
     return files
 
 
-def split_parquet(name: str, path: Path, folder: Path, part_bytes: int) -> list[Path]:
-    """Write row groups into numbered parts so no single upload exceeds the limit.
+def part_groups(source: pq.ParquetFile, part_bytes: int) -> list[list[int]]:
+    """Group row-group indices into parts of about the limit each.
 
-    Parts share the source schema; reading them together rebuilds the table.
+    A part closes once the next row group would push it past the limit, so a
+    part can exceed it by one row group and by re-encoding.
     """
-    source = pq.ParquetFile(path)
-    stem = name.removesuffix(".parquet")
-    parts: list[Path] = []
-    writer = None
+    groups: list[list[int]] = []
     written = 0
     for index in range(source.num_row_groups):
-        group = source.read_row_group(index)
         meta = source.metadata.row_group(index)
         estimate = sum(
             meta.column(column).total_compressed_size
             for column in range(meta.num_columns)
         )
-        if writer is not None and written + estimate > part_bytes:
-            writer.close()
-            writer = None
-        if writer is None:
-            parts.append(folder / f"{stem}-{len(parts) + 1:02d}.parquet")
-            writer = pq.ParquetWriter(
-                parts[-1], source.schema_arrow, compression="zstd"
-            )
+        if not groups or written + estimate > part_bytes:
+            groups.append([])
             written = 0
-        writer.write_table(group)
+        groups[-1].append(index)
         written += estimate
-    if writer is not None:
-        writer.close()
+    return groups
+
+
+def part_names(name: str, count: int) -> list[str]:
+    """Number a table's parts so name order is row order; two digits suffice."""
+    if count > 99:
+        raise ValueError(f"{name} would need {count} parts; raise the part size")
+    stem = name.removesuffix(".parquet")
+    return [f"{stem}-{index:02d}.parquet" for index in range(1, count + 1)]
+
+
+def plan_parts(name: str, path: Path, part_bytes: int) -> list[str]:
+    """Name the parts a table would be deposited as, without writing them."""
+    if path.suffix != ".parquet" or path.stat().st_size <= part_bytes:
+        return []
+    groups = part_groups(pq.ParquetFile(path), part_bytes)
+    return part_names(name, len(groups)) if len(groups) > 1 else []
+
+
+def split_parquet(name: str, path: Path, folder: Path, part_bytes: int) -> list[Path]:
+    """Write the planned parts; they share the source schema, in name order."""
+    source = pq.ParquetFile(path)
+    groups = part_groups(source, part_bytes)
+    parts = [folder / part for part in part_names(name, len(groups))]
+    for part, indices in zip(parts, groups, strict=True):
+        with pq.ParquetWriter(part, source.schema_arrow, compression="zstd") as writer:
+            for index in indices:
+                writer.write_table(source.read_row_group(index))
     return parts
 
 
@@ -149,7 +166,7 @@ def staged_files(
     staged: list[tuple[str, Path]] = []
     parts: dict[str, list[str]] = {}
     for name, path in deposit_files(root):
-        if path.suffix == ".parquet" and path.stat().st_size > part_bytes:
+        if plan_parts(name, path, part_bytes):
             folder.mkdir(exist_ok=True)
             pieces = split_parquet(name, path, folder, part_bytes)
             parts[name] = [piece.name for piece in pieces]
@@ -177,13 +194,16 @@ def deposit(
     version: str | None = None,
     publish: bool = False,
     deposition_id: int | None = None,
+    new_version: bool = False,
     part_bytes: int = PART_BYTES,
     backoff: float = 30,
 ) -> dict:
     """Create or reuse the draft named in root/zenodo.json and upload changed files.
 
     The draft's identity is saved as soon as it exists so that an interrupted
-    upload resumes into the same deposition instead of stranding it.
+    upload resumes into the same deposition instead of stranding it. A published
+    record is never modified; with new_version its files are carried into a new
+    draft, which then receives the changed files and, on request, is published.
     """
     base_url = base_url or HOSTS[sandbox]
     version = version or package_version("gs-meetings")
@@ -192,10 +212,9 @@ def deposit(
         session = requests.Session()
         session.headers["Authorization"] = f"Bearer {load_token(sandbox=sandbox)}"
     state_path = root / ("zenodo-sandbox.json" if sandbox else "zenodo.json")
-    if deposition_id is None and state_path.is_file():
-        state = json.loads(state_path.read_text())
-        if state.get("base_url") == base_url:
-            deposition_id = state["deposition_id"]
+    previous = json.loads(state_path.read_text()) if state_path.is_file() else {}
+    if deposition_id is None and previous.get("base_url") == base_url:
+        deposition_id = previous["deposition_id"]
     endpoint = f"{base_url}/api/deposit/depositions"
     if deposition_id is None:
         response = session.post(endpoint, json={}, timeout=TIMEOUT)
@@ -210,6 +229,7 @@ def deposit(
                 "doi": record["metadata"].get("prereserve_doi", {}).get("doi"),
                 "html": record["links"]["html"],
                 "base_url": base_url,
+                "concept_doi": previous.get("concept_doi"),
                 "published": False,
             },
         )
@@ -218,7 +238,32 @@ def deposit(
         checked(response)
         record = response.json()
     if record.get("submitted"):
-        raise ValueError(f"Deposition {deposition_id} is already published")
+        if not new_version:
+            raise ValueError(
+                f"Deposition {deposition_id} is already published; "
+                "pass --new-version to add a version"
+            )
+        response = session.post(
+            f"{endpoint}/{deposition_id}/actions/newversion", timeout=TIMEOUT
+        )
+        checked(response)
+        draft_url = response.json()["links"]["latest_draft"]
+        response = session.get(draft_url, timeout=TIMEOUT)
+        checked(response)
+        record = response.json()
+        deposition_id = record["id"]
+        LOG.info("Opened new version draft %s", deposition_id)
+        atomic_json(
+            state_path,
+            {
+                "deposition_id": deposition_id,
+                "doi": record["metadata"].get("prereserve_doi", {}).get("doi"),
+                "html": record["links"]["html"],
+                "base_url": base_url,
+                "concept_doi": previous.get("concept_doi"),
+                "published": False,
+            },
+        )
     response = session.put(
         f"{endpoint}/{deposition_id}",
         json={"metadata": metadata(version)},
@@ -238,13 +283,23 @@ def deposit(
         put_file(session, f"{record['links']['bucket']}/{name}", path, backoff)
         uploaded += 1
         LOG.info("Uploaded %s (%s bytes)", name, path.stat().st_size)
+    removed = remove_superseded(
+        session,
+        f"{endpoint}/{deposition_id}",
+        record.get("files", []),
+        [name for name, _ in files],
+        parts,
+    )
     doi = record["metadata"].get("prereserve_doi", {}).get("doi")
+    concept_doi = record.get("conceptdoi") or previous.get("concept_doi")
     if publish:
         response = session.post(
             f"{endpoint}/{deposition_id}/actions/publish", timeout=TIMEOUT
         )
         checked(response)
-        doi = response.json().get("doi", doi)
+        published = response.json()
+        doi = published.get("doi", doi)
+        concept_doi = published.get("conceptdoi") or concept_doi
     report = {
         "deposition_id": deposition_id,
         "doi": doi,
@@ -253,11 +308,60 @@ def deposit(
         "version": version,
         "uploaded": uploaded,
         "skipped": skipped,
+        "removed": removed,
         "parts": parts,
+        "concept_doi": concept_doi,
         "published": publish,
     }
     atomic_json(state_path, report)
     return report
+
+
+def is_part_of(name: str, whole: str) -> bool:
+    """Match the numbered part names that split_parquet derives from a table."""
+    stem = whole.removesuffix(".parquet")
+    return (
+        name.startswith(f"{stem}-")
+        and name.endswith(".parquet")
+        and name[len(stem) + 1 : -len(".parquet")].isdigit()
+    )
+
+
+def superseded_names(
+    remote: list[str], staged: list[str], parts: dict[str, list[str]]
+) -> list[str]:
+    """Name deposited files the current staging replaces.
+
+    A table now deposited as parts supersedes its whole file and any part not in
+    the current split; a table deposited whole supersedes its earlier parts.
+    """
+    stale = set()
+    for whole, pieces in parts.items():
+        stale.update(
+            name
+            for name in remote
+            if name == whole or (is_part_of(name, whole) and name not in pieces)
+        )
+    for whole in staged:
+        if whole.endswith(".parquet") and whole not in parts:
+            stale.update(name for name in remote if is_part_of(name, whole))
+    return sorted(stale - set(staged))
+
+
+def remove_superseded(
+    session: requests.Session,
+    deposition_url: str,
+    files: list[dict],
+    staged: list[str],
+    parts: dict,
+) -> list[str]:
+    """Delete deposited files that the current staging replaces."""
+    stale = superseded_names([entry["filename"] for entry in files], staged, parts)
+    ids = {entry["filename"]: entry["id"] for entry in files}
+    for name in stale:
+        checked(session.delete(f"{deposition_url}/files/{ids[name]}", timeout=TIMEOUT))
+        LOG.info("Removed %s, superseded by parts", name)
+    return stale
 
 
 def put_file(session: requests.Session, url: str, path: Path, backoff: float) -> None:
@@ -268,13 +372,18 @@ def put_file(session: requests.Session, url: str, path: Path, backoff: float) ->
                 response = session.put(url, data=stream, timeout=TIMEOUT)
         except requests.RequestException as exc:
             if attempt == ATTEMPTS:
-                raise
+                raise ValueError(
+                    f"Upload of {path.name} failed after {ATTEMPTS} attempts: {exc}"
+                ) from exc
             failure: object = exc
         else:
             if response.ok:
                 return
             if attempt == ATTEMPTS or response.status_code < 500:
-                checked(response)
+                raise ValueError(
+                    f"Upload of {path.name} failed: Zenodo returned "
+                    f"{response.status_code}: {response.text}"
+                )
             failure = response.status_code
         LOG.warning("Upload of %s failed with %s; retrying", path.name, failure)
         time.sleep(backoff * attempt)

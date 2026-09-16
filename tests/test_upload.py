@@ -23,6 +23,7 @@ class Session:
         self.metadata = None
         self.published = False
         self.headers = {}
+        self.current_id = 41
 
     def response(self, status, body):
         return SimpleNamespace(
@@ -35,17 +36,22 @@ class Session:
 
     def deposition(self):
         return {
-            "id": 41,
+            "id": self.current_id,
             "metadata": {
                 **(self.metadata or {}),
-                "prereserve_doi": {"doi": "10.5072/zenodo.41"},
+                "prereserve_doi": {"doi": f"10.5072/zenodo.{self.current_id}"},
             },
             "links": {
-                "bucket": f"{BASE}/api/files/bucket-41",
-                "html": f"{BASE}/deposit/41",
+                "bucket": f"{BASE}/api/files/bucket-{self.current_id}",
+                "html": f"{BASE}/deposit/{self.current_id}",
+                "latest_draft": f"{BASE}/api/deposit/depositions/{self.current_id}",
             },
             "files": [
-                {"filename": name, "checksum": hashlib.md5(data).hexdigest()}  # noqa: S324
+                {
+                    "filename": name,
+                    "id": f"id-{name}",
+                    "checksum": hashlib.md5(data).hexdigest(),  # noqa: S324
+                }
                 for name, data in self.files.items()
             ],
             "submitted": self.published,
@@ -55,12 +61,29 @@ class Session:
         self.calls.append(("POST", url))
         if url.endswith("/actions/publish"):
             self.published = True
-            return self.response(202, {**self.deposition(), "doi": "10.5072/zenodo.41"})
+            return self.response(
+                202,
+                {
+                    **self.deposition(),
+                    "doi": f"10.5072/zenodo.{self.current_id}",
+                    "conceptdoi": "10.5072/zenodo.40",
+                },
+            )
+        if url.endswith("/actions/newversion"):
+            self.current_id += 1
+            self.published = False
+            return self.response(201, self.deposition())
         return self.response(201, self.deposition())
 
     def get(self, url, timeout=None):
         self.calls.append(("GET", url))
         return self.response(200, self.deposition())
+
+    def delete(self, url, timeout=None):
+        self.calls.append(("DELETE", url))
+        name = url.rsplit("/id-", 1)[1]
+        self.files.pop(name)
+        return self.response(204, {})
 
     fail_after = None
     flaky = 0
@@ -240,7 +263,7 @@ def test_a_dropped_connection_is_retried_like_a_gateway_error(tmp_path):
     assert report["uploaded"] == 5
     session = Session()
     session.aborts = 4
-    with pytest.raises(requests.ConnectionError):
+    with pytest.raises(ValueError, match="Connection aborted"):
         deposit(root, session=session, base_url=BASE, version="1", backoff=0)
 
 
@@ -255,3 +278,132 @@ def test_dotfiles_empty_files_and_partial_writes_are_not_deposited(tmp_path):
     assert "notes.txt" not in session.files
     assert not any(name.endswith(".part") for name in session.files)
     assert "SCHEMA.md" in session.files
+
+
+def test_a_published_record_gets_a_new_version_only_when_asked(tmp_path):
+    root = tables(tmp_path)
+    session = Session()
+    deposit(root, session=session, base_url=BASE, version="1", publish=True)
+    (root / "feedback/tables").mkdir()
+    (root / "feedback/tables/feedback.parquet").write_bytes(b"new")
+    with pytest.raises(ValueError, match="new-version"):
+        deposit(root, session=session, base_url=BASE, version="2")
+    session.calls.clear()
+    report = deposit(
+        root, session=session, base_url=BASE, version="2", new_version=True
+    )
+    assert ("POST", f"{BASE}/api/deposit/depositions/41/actions/newversion") in (
+        session.calls
+    )
+    assert report["deposition_id"] == 42
+    assert report["published"] is False
+    assert report["uploaded"] == 1
+    assert report["skipped"] == 5
+    assert session.metadata["version"] == "2"
+    saved = json.loads((root / "zenodo.json").read_text())
+    assert saved["deposition_id"] == 42
+    report = deposit(root, session=session, base_url=BASE, version="2", publish=True)
+    assert report["doi"] == "10.5072/zenodo.42"
+
+
+def big_table(path, rows=30000, group=5000):
+    table = pa.table({"n": list(range(rows)), "s": ["x" * 40] * rows})
+    with pq.ParquetWriter(path, table.schema) as writer:
+        for start in range(0, rows, group):
+            writer.write_table(table.slice(start, group))
+    return table
+
+
+def test_switching_between_whole_and_parts_removes_superseded_files(tmp_path):
+    root = tables(tmp_path)
+    big_table(root / "meetings/tables/meetings.parquet")
+    session = Session()
+    deposit(root, session=session, base_url=BASE, version="1", part_bytes=10**9)
+    assert "meetings-meetings.parquet" in session.files
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=60_000
+    )
+    assert "meetings-meetings.parquet" not in session.files
+    assert report["removed"] == ["meetings-meetings.parquet"]
+    many = report["parts"]["meetings-meetings.parquet"]
+    assert len(many) >= 3
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=100_000
+    )
+    fewer = report["parts"]["meetings-meetings.parquet"]
+    assert 1 < len(fewer) < len(many)
+    assert report["removed"] == sorted(set(many) - set(fewer))
+    assert all(name in session.files for name in fewer)
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=10**9
+    )
+    assert report["parts"] == {}
+    assert report["removed"] == fewer
+    assert "meetings-meetings.parquet" in session.files
+    assert not any(name.startswith("meetings-meetings-") for name in session.files)
+
+
+def test_more_than_ninety_nine_parts_is_refused(tmp_path):
+    root = tables(tmp_path)
+    big_table(root / "meetings/tables/meetings.parquet", rows=120000, group=1000)
+    with pytest.raises(ValueError, match="raise the part size"):
+        deposit(root, session=Session(), base_url=BASE, version="1", part_bytes=1)
+
+
+def test_terminal_upload_failures_name_the_file(tmp_path):
+    root = tables(tmp_path)
+    session = Session()
+    session.aborts = 4
+    with pytest.raises(ValueError, match="failed after 4 attempts"):
+        deposit(root, session=session, base_url=BASE, version="1", backoff=0)
+    session = Session()
+    session.fail_after = 0
+    with pytest.raises(ValueError, match=r"Upload of .* failed: Zenodo returned 500"):
+        deposit(root, session=session, base_url=BASE, version="1", backoff=0)
+
+
+def test_a_sibling_table_named_like_a_part_is_never_removed(tmp_path):
+    root = tables(tmp_path)
+    big_table(root / "meetings/tables/meetings.parquet")
+    (root / "meetings/tables/meetings-2024.parquet").write_bytes(b"sibling")
+    session = Session()
+    deposit(root, session=session, base_url=BASE, version="1", part_bytes=10**9)
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=100_000
+    )
+    assert report["removed"] == ["meetings-meetings.parquet"]
+    assert session.files["meetings-meetings-2024.parquet"] == b"sibling"
+
+
+def test_concept_doi_comes_from_the_publish_response_and_is_never_lost(tmp_path):
+    root = tables(tmp_path)
+    session = Session()
+    report = deposit(root, session=session, base_url=BASE, version="1")
+    assert report["concept_doi"] is None
+    report = deposit(root, session=session, base_url=BASE, version="1", publish=True)
+    assert report["concept_doi"] == "10.5072/zenodo.40"
+    report = deposit(
+        root, session=session, base_url=BASE, version="2", new_version=True
+    )
+    assert report["concept_doi"] == "10.5072/zenodo.40"
+
+
+def test_uploader_and_card_split_on_the_same_plan(tmp_path):
+    root = tables(tmp_path)
+    path = root / "meetings/tables/meetings.parquet"
+    table = pa.table({"n": list(range(2000))})
+    pq.write_table(table, path)
+    size = path.stat().st_size
+    source = pq.ParquetFile(path)
+    chunks = sum(
+        source.metadata.row_group(g).column(c).total_compressed_size
+        for g in range(source.num_row_groups)
+        for c in range(source.metadata.row_group(g).num_columns)
+    )
+    assert chunks < size
+    session = Session()
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=chunks
+    )
+    assert report["parts"] == {}
+    assert "meetings-meetings.parquet" in session.files

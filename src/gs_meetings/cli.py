@@ -95,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--sandbox", action="store_true")
     command.add_argument("--publish", action="store_true")
     command.add_argument("--deposition", type=positive)
+    command.add_argument("--new-version", action="store_true")
     for name in ["list", "fetch", "parse"]:
         command = commands.add_parser(name)
         command.add_argument("--root", type=Path, default=Path("data/current"))
@@ -129,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
                 sandbox=args.sandbox,
                 publish=args.publish,
                 deposition_id=args.deposition,
+                new_version=args.new_version,
             )
             LOG.info("%s", json.dumps(report))
             return 0
