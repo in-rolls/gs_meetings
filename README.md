@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/in-rolls/gs_meetings/actions/workflows/ci.yml/badge.svg)](https://github.com/in-rolls/gs_meetings/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/in-rolls/gs_meetings)](https://github.com/in-rolls/gs_meetings/releases)
-[![Data: Zenodo](https://img.shields.io/badge/data-10.5281%2Fzenodo.22772026-blue)](https://doi.org/10.5281/zenodo.22772026)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22772026.svg)](https://doi.org/10.5281/zenodo.22772026)
 
 Collect and standardize the Ministry of Panchayati Raj's reports on Gram Sabhas
 held under the People's Plan Campaign. The reports summarize participation and
