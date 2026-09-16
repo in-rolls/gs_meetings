@@ -74,7 +74,8 @@ def test_data_card_reports_every_stage_from_its_manifest(tmp_path):
     assert "gs_meetings 0.3.1" in card
     assert "| `national-gp_reports.parquet` | 3 |" in card
     assert "| `meetings-meetings.parquet` | 4 |" in card
-    assert "meetings-meetings-01.parquet" in card
+    assert ".DS_Store" not in card
+    assert "half.parquet" not in card
     assert "2026-09-11" in card
     assert "| PPC | 2 |" in card
     assert "| current:2024-2025 | 3 | 2024-10-01 | 2025-03-30 |" in card
@@ -97,3 +98,18 @@ def test_data_card_names_missing_stages(tmp_path):
     assert "not included" in card
     with pytest.raises(ValueError, match="No exported"):
         write_data_card(tmp_path / "empty", schema=schema, version="0")
+
+
+def test_data_card_knows_the_parts_before_the_first_upload(tmp_path, monkeypatch):
+    stage(tmp_path, "meetings", {"rows": 3, "rows_by_period": {}}, {})
+    table = pa.table({"n": list(range(30000)), "s": ["x" * 40] * 30000})
+    path = tmp_path / "meetings/tables/meetings.parquet"
+    with pq.ParquetWriter(path, table.schema) as writer:
+        for start in range(0, 30000, 5000):
+            writer.write_table(table.slice(start, 5000))
+    monkeypatch.setattr("gs_meetings.datacard.PART_BYTES", 100_000)
+    schema = tmp_path / "SCHEMA.md"
+    schema.write_text("# Schema\n")
+    write_data_card(tmp_path, schema=schema, version="0")
+    card = (tmp_path / "deposit" / "README_DATA.md").read_text()
+    assert "deposited as parts: `meetings-meetings-01.parquet`" in card

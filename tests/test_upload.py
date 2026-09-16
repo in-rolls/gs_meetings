@@ -47,7 +47,11 @@ class Session:
                 "latest_draft": f"{BASE}/api/deposit/depositions/{self.current_id}",
             },
             "files": [
-                {"filename": name, "checksum": hashlib.md5(data).hexdigest()}  # noqa: S324
+                {
+                    "filename": name,
+                    "id": f"id-{name}",
+                    "checksum": hashlib.md5(data).hexdigest(),  # noqa: S324
+                }
                 for name, data in self.files.items()
             ],
             "submitted": self.published,
@@ -69,6 +73,12 @@ class Session:
     def get(self, url, timeout=None):
         self.calls.append(("GET", url))
         return self.response(200, self.deposition())
+
+    def delete(self, url, timeout=None):
+        self.calls.append(("DELETE", url))
+        name = url.rsplit("/id-", 1)[1]
+        self.files.pop(name)
+        return self.response(204, {})
 
     fail_after = None
     flaky = 0
@@ -248,7 +258,7 @@ def test_a_dropped_connection_is_retried_like_a_gateway_error(tmp_path):
     assert report["uploaded"] == 5
     session = Session()
     session.aborts = 4
-    with pytest.raises(requests.ConnectionError):
+    with pytest.raises(ValueError, match="Connection aborted"):
         deposit(root, session=session, base_url=BASE, version="1", backoff=0)
 
 
@@ -289,3 +299,59 @@ def test_a_published_record_gets_a_new_version_only_when_asked(tmp_path):
     assert saved["deposition_id"] == 42
     report = deposit(root, session=session, base_url=BASE, version="2", publish=True)
     assert report["doi"] == "10.5072/zenodo.42"
+
+
+def big_table(path, rows=30000, group=5000):
+    table = pa.table({"n": list(range(rows)), "s": ["x" * 40] * rows})
+    with pq.ParquetWriter(path, table.schema) as writer:
+        for start in range(0, rows, group):
+            writer.write_table(table.slice(start, group))
+    return table
+
+
+def test_switching_between_whole_and_parts_removes_superseded_files(tmp_path):
+    root = tables(tmp_path)
+    big_table(root / "meetings/tables/meetings.parquet")
+    session = Session()
+    deposit(root, session=session, base_url=BASE, version="1", part_bytes=10**9)
+    assert "meetings-meetings.parquet" in session.files
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=60_000
+    )
+    assert "meetings-meetings.parquet" not in session.files
+    assert report["removed"] == ["meetings-meetings.parquet"]
+    many = report["parts"]["meetings-meetings.parquet"]
+    assert len(many) >= 3
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=100_000
+    )
+    fewer = report["parts"]["meetings-meetings.parquet"]
+    assert 1 < len(fewer) < len(many)
+    assert report["removed"] == sorted(set(many) - set(fewer))
+    assert all(name in session.files for name in fewer)
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=10**9
+    )
+    assert report["parts"] == {}
+    assert report["removed"] == fewer
+    assert "meetings-meetings.parquet" in session.files
+    assert not any(name.startswith("meetings-meetings-") for name in session.files)
+
+
+def test_more_than_ninety_nine_parts_is_refused(tmp_path):
+    root = tables(tmp_path)
+    big_table(root / "meetings/tables/meetings.parquet", rows=120000, group=1000)
+    with pytest.raises(ValueError, match="raise the part size"):
+        deposit(root, session=Session(), base_url=BASE, version="1", part_bytes=1)
+
+
+def test_terminal_upload_failures_name_the_file(tmp_path):
+    root = tables(tmp_path)
+    session = Session()
+    session.aborts = 4
+    with pytest.raises(ValueError, match="failed after 4 attempts"):
+        deposit(root, session=session, base_url=BASE, version="1", backoff=0)
+    session = Session()
+    session.fail_after = 0
+    with pytest.raises(ValueError, match=r"Upload of .* failed: Zenodo returned 500"):
+        deposit(root, session=session, base_url=BASE, version="1", backoff=0)

@@ -107,9 +107,11 @@ def deposit_files(root: Path) -> list[tuple[str, Path]]:
 
 
 def split_parquet(name: str, path: Path, folder: Path, part_bytes: int) -> list[Path]:
-    """Write row groups into numbered parts so no single upload exceeds the limit.
+    """Write row groups into numbered parts of about the limit each.
 
-    Parts share the source schema; reading them together rebuilds the table.
+    A part closes once the next row group would push it past the limit, so a
+    part can exceed it by one row group and by re-encoding. Parts share the
+    source schema; reading them together in name order rebuilds the table.
     """
     source = pq.ParquetFile(path)
     stem = name.removesuffix(".parquet")
@@ -136,6 +138,8 @@ def split_parquet(name: str, path: Path, folder: Path, part_bytes: int) -> list[
         written += estimate
     if writer is not None:
         writer.close()
+    if len(parts) > 99:
+        raise ValueError(f"{name} would need {len(parts)} parts; raise the part size")
     return parts
 
 
@@ -257,6 +261,13 @@ def deposit(
         entry["filename"]: entry["checksum"].removeprefix("md5:")
         for entry in record.get("files", [])
     }
+    removed = remove_superseded(
+        session,
+        f"{endpoint}/{deposition_id}",
+        record.get("files", []),
+        [name for name, _ in files],
+        parts,
+    )
     uploaded = skipped = 0
     for name, path in files:
         if existing.get(name) == md5(path):
@@ -280,11 +291,60 @@ def deposit(
         "version": version,
         "uploaded": uploaded,
         "skipped": skipped,
+        "removed": removed,
         "parts": parts,
+        "concept_doi": record.get("conceptdoi"),
         "published": publish,
     }
     atomic_json(state_path, report)
     return report
+
+
+def is_part_of(name: str, whole: str) -> bool:
+    """Match the numbered part names that split_parquet derives from a table."""
+    stem = whole.removesuffix(".parquet")
+    return (
+        name.startswith(f"{stem}-")
+        and name.endswith(".parquet")
+        and name[len(stem) + 1 : -len(".parquet")].isdigit()
+    )
+
+
+def superseded_names(
+    remote: list[str], staged: list[str], parts: dict[str, list[str]]
+) -> list[str]:
+    """Name deposited files the current staging replaces.
+
+    A table now deposited as parts supersedes its whole file and any part not in
+    the current split; a table deposited whole supersedes its earlier parts.
+    """
+    stale = set()
+    for whole, pieces in parts.items():
+        stale.update(
+            name
+            for name in remote
+            if name == whole or (is_part_of(name, whole) and name not in pieces)
+        )
+    for whole in staged:
+        if whole.endswith(".parquet") and whole not in parts:
+            stale.update(name for name in remote if is_part_of(name, whole))
+    return sorted(stale)
+
+
+def remove_superseded(
+    session: requests.Session,
+    deposition_url: str,
+    files: list[dict],
+    staged: list[str],
+    parts: dict,
+) -> list[str]:
+    """Delete deposited files that the current staging replaces."""
+    stale = superseded_names([entry["filename"] for entry in files], staged, parts)
+    ids = {entry["filename"]: entry["id"] for entry in files}
+    for name in stale:
+        checked(session.delete(f"{deposition_url}/files/{ids[name]}", timeout=TIMEOUT))
+        LOG.info("Removed %s, superseded by parts", name)
+    return stale
 
 
 def put_file(session: requests.Session, url: str, path: Path, backoff: float) -> None:
@@ -295,13 +355,18 @@ def put_file(session: requests.Session, url: str, path: Path, backoff: float) ->
                 response = session.put(url, data=stream, timeout=TIMEOUT)
         except requests.RequestException as exc:
             if attempt == ATTEMPTS:
-                raise
+                raise ValueError(
+                    f"Upload of {path.name} failed after {ATTEMPTS} attempts: {exc}"
+                ) from exc
             failure: object = exc
         else:
             if response.ok:
                 return
             if attempt == ATTEMPTS or response.status_code < 500:
-                checked(response)
+                raise ValueError(
+                    f"Upload of {path.name} failed: Zenodo returned "
+                    f"{response.status_code}: {response.text}"
+                )
             failure = response.status_code
         LOG.warning("Upload of %s failed with %s; retrying", path.name, failure)
         time.sleep(backoff * attempt)

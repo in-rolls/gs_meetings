@@ -280,7 +280,9 @@ uv run gs-meetings upload --root data --new-version
 `data-card` writes `data/deposit/README_DATA.md` from the stages' manifests
 (files and row counts, capture window, rows by edition and year, feedback
 outcomes, error counts, and the manifests' own caveats) and copies `SCHEMA.md`
-beside it, so the deposit's description cannot drift from the tables.
+beside it, so the deposit's description cannot drift from the tables. It stages
+the same Parquet split that `upload` performs, so the card names the parts
+before the first upload.
 
 `upload` creates a draft deposition the first time and records its ID in
 `data/zenodo.json` (`data/zenodo-sandbox.json` with `--sandbox`) before uploading
@@ -290,9 +292,12 @@ locally stay in the draft; delete them on Zenodo before publishing. A Parquet
 file over 50 MiB is uploaded as numbered parts (`meetings-meetings-01.parquet`,
 `-02`, ...) that share its schema, because Zenodo's proxy drops a single
 upload that is large or runs for long; read the parts together to rebuild the
-table. A dropped upload is retried from the start of the file. Every `*/tables/*` file is uploaded with its stage
-as a prefix, and files under `data/deposit/` (such as a copy of `SCHEMA.md`)
-are uploaded as they are. The token comes from `ZENODO_TOKEN`
+table. When a table that was deposited whole is later deposited as parts, or
+its part count changes, the superseded files are removed from the draft. A
+dropped upload is retried from the start of the file. Every non-empty
+`*/tables/*` file is uploaded with its stage as a prefix, and files under
+`data/deposit/` (such as a copy of `SCHEMA.md`) are uploaded as they are;
+dotfiles, empty files and partial writes are skipped. The token comes from `ZENODO_TOKEN`
 (`ZENODO_SANDBOX_TOKEN` with `--sandbox`) or from `[zenodo] api_token` in
 `~/.config/zenodo.ini`. The record's version is the installed package version.
 `--publish` is the irreversible step. Once a version is published, `--new-version`

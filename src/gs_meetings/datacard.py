@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+from gs_meetings.upload import PART_BYTES, depositable, staged_files
+
 STAGES = ["national", "meetings", "feedback"]
 REPOSITORY = "https://github.com/in-rolls/gs_meetings"
 
@@ -14,7 +16,7 @@ def table_rows(folder: Path, stage: str) -> list[tuple[str, int | None]]:
     """List every deposited file of a stage with its Parquet row count."""
     rows = []
     for path in sorted(folder.iterdir()):
-        if path.name.endswith(".part") or not path.is_file():
+        if not depositable(path):
             continue
         count = (
             pq.ParquetFile(path).metadata.num_rows
@@ -88,10 +90,9 @@ def write_data_card(root: Path, *, schema: Path, version: str) -> dict:
     if not stages:
         raise ValueError(f"No exported manifests under {root}")
     missing = [stage for stage in STAGES if stage not in stages]
-    parts = {}
-    state = root / "zenodo.json"
-    if state.is_file():
-        parts = json.loads(state.read_text()).get("parts", {})
+    # Stage the split the same way upload will, so the card knows the parts
+    # before the first upload and regardless of which state file exists.
+    _, parts = staged_files(root, PART_BYTES)
     lines = [
         "# Gram Sabha participation reports from gpdp.nic.in",
         "",
