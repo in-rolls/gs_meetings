@@ -79,15 +79,27 @@ def metadata(version: str) -> dict:
     }
 
 
+def depositable(path: Path) -> bool:
+    """Skip partial writes, editor droppings and empty files, which Zenodo rejects."""
+    return (
+        path.is_file()
+        and not path.name.startswith(".")
+        and not path.name.endswith(".part")
+        and path.stat().st_size > 0
+    )
+
+
 def deposit_files(root: Path) -> list[tuple[str, Path]]:
     """Name every stage's table with its stage; extra deposit files keep their names."""
     files = [
         (f"{path.parent.parent.name}-{path.name}", path)
         for path in sorted(root.glob("*/tables/*"))
-        if path.is_file() and not path.name.endswith(".part")
+        if depositable(path)
     ]
     files.extend(
-        (path.name, path) for path in sorted(root.glob("deposit/*")) if path.is_file()
+        (path.name, path)
+        for path in sorted(root.glob("deposit/*"))
+        if depositable(path)
     )
     if not files:
         raise ValueError(f"No exported tables under {root}")
