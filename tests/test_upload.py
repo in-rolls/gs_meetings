@@ -23,6 +23,7 @@ class Session:
         self.metadata = None
         self.published = False
         self.headers = {}
+        self.current_id = 41
 
     def response(self, status, body):
         return SimpleNamespace(
@@ -35,14 +36,15 @@ class Session:
 
     def deposition(self):
         return {
-            "id": 41,
+            "id": self.current_id,
             "metadata": {
                 **(self.metadata or {}),
-                "prereserve_doi": {"doi": "10.5072/zenodo.41"},
+                "prereserve_doi": {"doi": f"10.5072/zenodo.{self.current_id}"},
             },
             "links": {
-                "bucket": f"{BASE}/api/files/bucket-41",
-                "html": f"{BASE}/deposit/41",
+                "bucket": f"{BASE}/api/files/bucket-{self.current_id}",
+                "html": f"{BASE}/deposit/{self.current_id}",
+                "latest_draft": f"{BASE}/api/deposit/depositions/{self.current_id}",
             },
             "files": [
                 {"filename": name, "checksum": hashlib.md5(data).hexdigest()}  # noqa: S324
@@ -55,7 +57,13 @@ class Session:
         self.calls.append(("POST", url))
         if url.endswith("/actions/publish"):
             self.published = True
-            return self.response(202, {**self.deposition(), "doi": "10.5072/zenodo.41"})
+            return self.response(
+                202, {**self.deposition(), "doi": f"10.5072/zenodo.{self.current_id}"}
+            )
+        if url.endswith("/actions/newversion"):
+            self.current_id += 1
+            self.published = False
+            return self.response(201, self.deposition())
         return self.response(201, self.deposition())
 
     def get(self, url, timeout=None):
@@ -255,3 +263,29 @@ def test_dotfiles_empty_files_and_partial_writes_are_not_deposited(tmp_path):
     assert "notes.txt" not in session.files
     assert not any(name.endswith(".part") for name in session.files)
     assert "SCHEMA.md" in session.files
+
+
+def test_a_published_record_gets_a_new_version_only_when_asked(tmp_path):
+    root = tables(tmp_path)
+    session = Session()
+    deposit(root, session=session, base_url=BASE, version="1", publish=True)
+    (root / "feedback/tables").mkdir()
+    (root / "feedback/tables/feedback.parquet").write_bytes(b"new")
+    with pytest.raises(ValueError, match="new-version"):
+        deposit(root, session=session, base_url=BASE, version="2")
+    session.calls.clear()
+    report = deposit(
+        root, session=session, base_url=BASE, version="2", new_version=True
+    )
+    assert ("POST", f"{BASE}/api/deposit/depositions/41/actions/newversion") in (
+        session.calls
+    )
+    assert report["deposition_id"] == 42
+    assert report["published"] is False
+    assert report["uploaded"] == 1
+    assert report["skipped"] == 5
+    assert session.metadata["version"] == "2"
+    saved = json.loads((root / "zenodo.json").read_text())
+    assert saved["deposition_id"] == 42
+    report = deposit(root, session=session, base_url=BASE, version="2", publish=True)
+    assert report["doi"] == "10.5072/zenodo.42"

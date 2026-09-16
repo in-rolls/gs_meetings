@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "Please cite this software and the official report URL and capture date."
 type: software
-version: "0.3.0"
-date-released: 2026-09-15
+version: "0.3.1"
+date-released: 2026-09-16
 title: "Gram Sabha participation reports"
 authors:
   - family-names: Sood
@@ -10,6 +10,13 @@ authors:
     email: contact@gsood.com
 repository-code: "https://github.com/in-rolls/gs_meetings"
 url: "https://github.com/in-rolls/gs_meetings"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.22772026"
+    description: "Exported tables on Zenodo; concept DOI for the newest version."
+  - type: doi
+    value: "10.5281/zenodo.22772027"
+    description: "Version published 2026-09-16: national summaries and dated meetings."
 license: MIT
 keywords:
   - India

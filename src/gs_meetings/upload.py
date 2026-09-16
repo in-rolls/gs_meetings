@@ -177,13 +177,16 @@ def deposit(
     version: str | None = None,
     publish: bool = False,
     deposition_id: int | None = None,
+    new_version: bool = False,
     part_bytes: int = PART_BYTES,
     backoff: float = 30,
 ) -> dict:
     """Create or reuse the draft named in root/zenodo.json and upload changed files.
 
     The draft's identity is saved as soon as it exists so that an interrupted
-    upload resumes into the same deposition instead of stranding it.
+    upload resumes into the same deposition instead of stranding it. A published
+    record is never modified; with new_version its files are carried into a new
+    draft, which then receives the changed files and, on request, is published.
     """
     base_url = base_url or HOSTS[sandbox]
     version = version or package_version("gs-meetings")
@@ -218,7 +221,31 @@ def deposit(
         checked(response)
         record = response.json()
     if record.get("submitted"):
-        raise ValueError(f"Deposition {deposition_id} is already published")
+        if not new_version:
+            raise ValueError(
+                f"Deposition {deposition_id} is already published; "
+                "pass --new-version to add a version"
+            )
+        response = session.post(
+            f"{endpoint}/{deposition_id}/actions/newversion", timeout=TIMEOUT
+        )
+        checked(response)
+        draft_url = response.json()["links"]["latest_draft"]
+        response = session.get(draft_url, timeout=TIMEOUT)
+        checked(response)
+        record = response.json()
+        deposition_id = record["id"]
+        LOG.info("Opened new version draft %s", deposition_id)
+        atomic_json(
+            state_path,
+            {
+                "deposition_id": deposition_id,
+                "doi": record["metadata"].get("prereserve_doi", {}).get("doi"),
+                "html": record["links"]["html"],
+                "base_url": base_url,
+                "published": False,
+            },
+        )
     response = session.put(
         f"{endpoint}/{deposition_id}",
         json={"metadata": metadata(version)},

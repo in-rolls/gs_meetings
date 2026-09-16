@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/in-rolls/gs_meetings/actions/workflows/ci.yml/badge.svg)](https://github.com/in-rolls/gs_meetings/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/in-rolls/gs_meetings)](https://github.com/in-rolls/gs_meetings/releases)
+[![Data: Zenodo](https://img.shields.io/badge/data-10.5281%2Fzenodo.22772026-blue)](https://doi.org/10.5281/zenodo.22772026)
 
 Collect and standardize the Ministry of Panchayati Raj's reports on Gram Sabhas
 held under the People's Plan Campaign. The reports summarize participation and
@@ -14,9 +15,11 @@ and coverage limits below.
 The summary snapshot captured on 2026-09-11 contains **1,242,582 GP-by-edition records** from the
 live report and four archives. It includes explicit source coverage gaps.
 The dated collection contains **2,424,299 listing rows**. These are source entries,
-not a deduplicated count of meetings. Individual facilitator reports are still
-downloading. Output stays under `data/`. The tables will be deposited on Zenodo
-with the data release; until that DOI exists, cite the portal and capture date.
+not a deduplicated count of meetings. Both stages' tables are on Zenodo at
+[doi:10.5281/zenodo.22772026](https://doi.org/10.5281/zenodo.22772026) (25 files,
+341 MB, CC0; the concept DOI resolves to the newest version). Individual
+facilitator reports are still downloading and will be added as a new version of
+the record. Output stays under `data/`.
 
 | Summary edition | GP/TLB records |
 |---|---:|
@@ -263,14 +266,15 @@ and complete geographic coverage are different claims. The feedback export needs
 the flag only for transport failures; the portal's stable no-form response is an
 exported outcome (see "Coverage and interpretation"), not a source error.
 
-Exported tables are deposited on Zenodo in two steps, because the record cannot
-be changed once published:
+Exported tables are deposited on Zenodo in two steps, because a published
+version cannot be changed:
 
 ```sh
 uv run gs-meetings data-card --root data
 uv run gs-meetings upload --root data --sandbox
 uv run gs-meetings upload --root data
 uv run gs-meetings upload --root data --publish
+uv run gs-meetings upload --root data --new-version
 ```
 
 `data-card` writes `data/deposit/README_DATA.md` from the stages' manifests
@@ -291,7 +295,10 @@ as a prefix, and files under `data/deposit/` (such as a copy of `SCHEMA.md`)
 are uploaded as they are. The token comes from `ZENODO_TOKEN`
 (`ZENODO_SANDBOX_TOKEN` with `--sandbox`) or from `[zenodo] api_token` in
 `~/.config/zenodo.ini`. The record's version is the installed package version.
-`--publish` is the irreversible step.
+`--publish` is the irreversible step. Once a version is published, `--new-version`
+opens a new draft that inherits its files; the next runs add or replace files in
+that draft, and `--publish` releases it under a new version DOI while the concept
+DOI keeps resolving to the newest version.
 
 Feedback collection can begin while dated listings are downloading. Repeat it
 after the dated stage finishes to add the remaining reports. Feedback export checks
@@ -362,8 +369,10 @@ uv run pre-commit run --all-files
 ## Citation
 
 Cite the Ministry of Panchayati Raj's report URL, edition and capture date for the
-data, and [CITATION.cff](CITATION.cff) for this software. The dataset DOI will be
-added here when the Zenodo record is published.
+data, and [CITATION.cff](CITATION.cff) for this software. Cite the tables by the
+concept DOI [10.5281/zenodo.22772026](https://doi.org/10.5281/zenodo.22772026),
+which resolves to the newest version; the version published on 2026-09-16 is
+[10.5281/zenodo.22772027](https://doi.org/10.5281/zenodo.22772027).
 The original source notes remain available at commit
 [`3d95a90`](https://github.com/in-rolls/gs_meetings/tree/3d95a90).
 
