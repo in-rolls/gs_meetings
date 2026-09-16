@@ -242,3 +242,16 @@ def test_a_dropped_connection_is_retried_like_a_gateway_error(tmp_path):
     session.aborts = 4
     with pytest.raises(requests.ConnectionError):
         deposit(root, session=session, base_url=BASE, version="1", backoff=0)
+
+
+def test_dotfiles_empty_files_and_partial_writes_are_not_deposited(tmp_path):
+    root = tables(tmp_path)
+    (root / "deposit" / ".Rhistory").write_bytes(b"")
+    (root / "deposit" / "notes.txt").write_bytes(b"")
+    (root / "national" / "tables" / "gp.parquet.part").write_bytes(b"half")
+    session = Session()
+    deposit(root, session=session, base_url=BASE, version="1")
+    assert ".Rhistory" not in session.files
+    assert "notes.txt" not in session.files
+    assert not any(name.endswith(".part") for name in session.files)
+    assert "SCHEMA.md" in session.files
