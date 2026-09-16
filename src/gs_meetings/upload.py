@@ -166,7 +166,7 @@ def staged_files(
     staged: list[tuple[str, Path]] = []
     parts: dict[str, list[str]] = {}
     for name, path in deposit_files(root):
-        if path.suffix == ".parquet" and path.stat().st_size > part_bytes:
+        if plan_parts(name, path, part_bytes):
             folder.mkdir(exist_ok=True)
             pieces = split_parquet(name, path, folder, part_bytes)
             parts[name] = [piece.name for piece in pieces]

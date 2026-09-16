@@ -386,3 +386,24 @@ def test_concept_doi_comes_from_the_publish_response_and_is_never_lost(tmp_path)
         root, session=session, base_url=BASE, version="2", new_version=True
     )
     assert report["concept_doi"] == "10.5072/zenodo.40"
+
+
+def test_uploader_and_card_split_on_the_same_plan(tmp_path):
+    root = tables(tmp_path)
+    path = root / "meetings/tables/meetings.parquet"
+    table = pa.table({"n": list(range(2000))})
+    pq.write_table(table, path)
+    size = path.stat().st_size
+    source = pq.ParquetFile(path)
+    chunks = sum(
+        source.metadata.row_group(g).column(c).total_compressed_size
+        for g in range(source.num_row_groups)
+        for c in range(source.metadata.row_group(g).num_columns)
+    )
+    assert chunks < size
+    session = Session()
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=chunks
+    )
+    assert report["parts"] == {}
+    assert "meetings-meetings.parquet" in session.files
