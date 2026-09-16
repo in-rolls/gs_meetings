@@ -62,7 +62,12 @@ class Session:
         if url.endswith("/actions/publish"):
             self.published = True
             return self.response(
-                202, {**self.deposition(), "doi": f"10.5072/zenodo.{self.current_id}"}
+                202,
+                {
+                    **self.deposition(),
+                    "doi": f"10.5072/zenodo.{self.current_id}",
+                    "conceptdoi": "10.5072/zenodo.40",
+                },
             )
         if url.endswith("/actions/newversion"):
             self.current_id += 1
@@ -355,3 +360,29 @@ def test_terminal_upload_failures_name_the_file(tmp_path):
     session.fail_after = 0
     with pytest.raises(ValueError, match=r"Upload of .* failed: Zenodo returned 500"):
         deposit(root, session=session, base_url=BASE, version="1", backoff=0)
+
+
+def test_a_sibling_table_named_like_a_part_is_never_removed(tmp_path):
+    root = tables(tmp_path)
+    big_table(root / "meetings/tables/meetings.parquet")
+    (root / "meetings/tables/meetings-2024.parquet").write_bytes(b"sibling")
+    session = Session()
+    deposit(root, session=session, base_url=BASE, version="1", part_bytes=10**9)
+    report = deposit(
+        root, session=session, base_url=BASE, version="1", part_bytes=100_000
+    )
+    assert report["removed"] == ["meetings-meetings.parquet"]
+    assert session.files["meetings-meetings-2024.parquet"] == b"sibling"
+
+
+def test_concept_doi_comes_from_the_publish_response_and_is_never_lost(tmp_path):
+    root = tables(tmp_path)
+    session = Session()
+    report = deposit(root, session=session, base_url=BASE, version="1")
+    assert report["concept_doi"] is None
+    report = deposit(root, session=session, base_url=BASE, version="1", publish=True)
+    assert report["concept_doi"] == "10.5072/zenodo.40"
+    report = deposit(
+        root, session=session, base_url=BASE, version="2", new_version=True
+    )
+    assert report["concept_doi"] == "10.5072/zenodo.40"

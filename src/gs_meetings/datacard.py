@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from gs_meetings.upload import PART_BYTES, depositable, staged_files
+from gs_meetings.upload import PART_BYTES, deposit_files, depositable, plan_parts
 
 STAGES = ["national", "meetings", "feedback"]
 REPOSITORY = "https://github.com/in-rolls/gs_meetings"
@@ -90,9 +90,13 @@ def write_data_card(root: Path, *, schema: Path, version: str) -> dict:
     if not stages:
         raise ValueError(f"No exported manifests under {root}")
     missing = [stage for stage in STAGES if stage not in stages]
-    # Stage the split the same way upload will, so the card knows the parts
-    # before the first upload and regardless of which state file exists.
-    _, parts = staged_files(root, PART_BYTES)
+    # Plan the split the way upload will, without writing parts, so the card
+    # names them before the first upload and regardless of any state file.
+    parts = {
+        name: pieces
+        for name, path in deposit_files(root)
+        if (pieces := plan_parts(name, path, PART_BYTES))
+    }
     lines = [
         "# Gram Sabha participation reports from gpdp.nic.in",
         "",

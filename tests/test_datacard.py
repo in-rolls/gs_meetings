@@ -60,11 +60,8 @@ def test_data_card_reports_every_stage_from_its_manifest(tmp_path):
         },
         {"feedback": 2, "feedback_links": 4, "feedback_coverage": 3},
     )
-    (tmp_path / "zenodo.json").write_text(
-        json.dumps(
-            {"parts": {"meetings-meetings.parquet": ["meetings-meetings-01.parquet"]}}
-        )
-    )
+    (tmp_path / "meetings" / "tables" / ".DS_Store").write_bytes(b"")
+    (tmp_path / "meetings" / "tables" / "half.parquet.part").write_bytes(b"x")
     schema = tmp_path / "SCHEMA.md"
     schema.write_text("# Schema\n")
     report = write_data_card(tmp_path, schema=schema, version="0.3.1")
@@ -113,3 +110,4 @@ def test_data_card_knows_the_parts_before_the_first_upload(tmp_path, monkeypatch
     write_data_card(tmp_path, schema=schema, version="0")
     card = (tmp_path / "deposit" / "README_DATA.md").read_text()
     assert "deposited as parts: `meetings-meetings-01.parquet`" in card
+    assert not (tmp_path / "deposit-parts").exists()

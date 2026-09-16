@@ -106,40 +106,53 @@ def deposit_files(root: Path) -> list[tuple[str, Path]]:
     return files
 
 
-def split_parquet(name: str, path: Path, folder: Path, part_bytes: int) -> list[Path]:
-    """Write row groups into numbered parts of about the limit each.
+def part_groups(source: pq.ParquetFile, part_bytes: int) -> list[list[int]]:
+    """Group row-group indices into parts of about the limit each.
 
     A part closes once the next row group would push it past the limit, so a
-    part can exceed it by one row group and by re-encoding. Parts share the
-    source schema; reading them together in name order rebuilds the table.
+    part can exceed it by one row group and by re-encoding.
     """
-    source = pq.ParquetFile(path)
-    stem = name.removesuffix(".parquet")
-    parts: list[Path] = []
-    writer = None
+    groups: list[list[int]] = []
     written = 0
     for index in range(source.num_row_groups):
-        group = source.read_row_group(index)
         meta = source.metadata.row_group(index)
         estimate = sum(
             meta.column(column).total_compressed_size
             for column in range(meta.num_columns)
         )
-        if writer is not None and written + estimate > part_bytes:
-            writer.close()
-            writer = None
-        if writer is None:
-            parts.append(folder / f"{stem}-{len(parts) + 1:02d}.parquet")
-            writer = pq.ParquetWriter(
-                parts[-1], source.schema_arrow, compression="zstd"
-            )
+        if not groups or written + estimate > part_bytes:
+            groups.append([])
             written = 0
-        writer.write_table(group)
+        groups[-1].append(index)
         written += estimate
-    if writer is not None:
-        writer.close()
-    if len(parts) > 99:
-        raise ValueError(f"{name} would need {len(parts)} parts; raise the part size")
+    return groups
+
+
+def part_names(name: str, count: int) -> list[str]:
+    """Number a table's parts so name order is row order; two digits suffice."""
+    if count > 99:
+        raise ValueError(f"{name} would need {count} parts; raise the part size")
+    stem = name.removesuffix(".parquet")
+    return [f"{stem}-{index:02d}.parquet" for index in range(1, count + 1)]
+
+
+def plan_parts(name: str, path: Path, part_bytes: int) -> list[str]:
+    """Name the parts a table would be deposited as, without writing them."""
+    if path.suffix != ".parquet" or path.stat().st_size <= part_bytes:
+        return []
+    groups = part_groups(pq.ParquetFile(path), part_bytes)
+    return part_names(name, len(groups)) if len(groups) > 1 else []
+
+
+def split_parquet(name: str, path: Path, folder: Path, part_bytes: int) -> list[Path]:
+    """Write the planned parts; they share the source schema, in name order."""
+    source = pq.ParquetFile(path)
+    groups = part_groups(source, part_bytes)
+    parts = [folder / part for part in part_names(name, len(groups))]
+    for part, indices in zip(parts, groups, strict=True):
+        with pq.ParquetWriter(part, source.schema_arrow, compression="zstd") as writer:
+            for index in indices:
+                writer.write_table(source.read_row_group(index))
     return parts
 
 
@@ -199,10 +212,9 @@ def deposit(
         session = requests.Session()
         session.headers["Authorization"] = f"Bearer {load_token(sandbox=sandbox)}"
     state_path = root / ("zenodo-sandbox.json" if sandbox else "zenodo.json")
-    if deposition_id is None and state_path.is_file():
-        state = json.loads(state_path.read_text())
-        if state.get("base_url") == base_url:
-            deposition_id = state["deposition_id"]
+    previous = json.loads(state_path.read_text()) if state_path.is_file() else {}
+    if deposition_id is None and previous.get("base_url") == base_url:
+        deposition_id = previous["deposition_id"]
     endpoint = f"{base_url}/api/deposit/depositions"
     if deposition_id is None:
         response = session.post(endpoint, json={}, timeout=TIMEOUT)
@@ -217,6 +229,7 @@ def deposit(
                 "doi": record["metadata"].get("prereserve_doi", {}).get("doi"),
                 "html": record["links"]["html"],
                 "base_url": base_url,
+                "concept_doi": previous.get("concept_doi"),
                 "published": False,
             },
         )
@@ -247,6 +260,7 @@ def deposit(
                 "doi": record["metadata"].get("prereserve_doi", {}).get("doi"),
                 "html": record["links"]["html"],
                 "base_url": base_url,
+                "concept_doi": previous.get("concept_doi"),
                 "published": False,
             },
         )
@@ -261,13 +275,6 @@ def deposit(
         entry["filename"]: entry["checksum"].removeprefix("md5:")
         for entry in record.get("files", [])
     }
-    removed = remove_superseded(
-        session,
-        f"{endpoint}/{deposition_id}",
-        record.get("files", []),
-        [name for name, _ in files],
-        parts,
-    )
     uploaded = skipped = 0
     for name, path in files:
         if existing.get(name) == md5(path):
@@ -276,13 +283,23 @@ def deposit(
         put_file(session, f"{record['links']['bucket']}/{name}", path, backoff)
         uploaded += 1
         LOG.info("Uploaded %s (%s bytes)", name, path.stat().st_size)
+    removed = remove_superseded(
+        session,
+        f"{endpoint}/{deposition_id}",
+        record.get("files", []),
+        [name for name, _ in files],
+        parts,
+    )
     doi = record["metadata"].get("prereserve_doi", {}).get("doi")
+    concept_doi = record.get("conceptdoi") or previous.get("concept_doi")
     if publish:
         response = session.post(
             f"{endpoint}/{deposition_id}/actions/publish", timeout=TIMEOUT
         )
         checked(response)
-        doi = response.json().get("doi", doi)
+        published = response.json()
+        doi = published.get("doi", doi)
+        concept_doi = published.get("conceptdoi") or concept_doi
     report = {
         "deposition_id": deposition_id,
         "doi": doi,
@@ -293,7 +310,7 @@ def deposit(
         "skipped": skipped,
         "removed": removed,
         "parts": parts,
-        "concept_doi": record.get("conceptdoi"),
+        "concept_doi": concept_doi,
         "published": publish,
     }
     atomic_json(state_path, report)
@@ -328,7 +345,7 @@ def superseded_names(
     for whole in staged:
         if whole.endswith(".parquet") and whole not in parts:
             stale.update(name for name in remote if is_part_of(name, whole))
-    return sorted(stale)
+    return sorted(stale - set(staged))
 
 
 def remove_superseded(
