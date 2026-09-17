@@ -374,6 +374,20 @@ def test_absent_forms_are_gp_year_outcomes_not_source_errors(tmp_path):
     )
 
 
+def test_resuming_retries_fetch_errors_but_not_absent_forms(tmp_path):
+    rows = [
+        {"id": 1, "code": 27784, "name": "B", "gram_sabha_date": "19-11-2024"},
+        {"id": 2, "code": 27785, "name": "C", "gram_sabha_date": "20-11-2024"},
+    ]
+    source, target = seeded_feedback_queue(tmp_path, rows)
+    resolve_feedback(
+        target, {"27784": ("error", FORM_ABSENT), "27785": ("error", NETWORK_ERROR)}
+    )
+    with closing(seed_feedback(target, meetings_root=source)) as db:
+        found = dict(db.execute("SELECT error,status FROM requests"))
+    assert found == {FORM_ABSENT: "error", NETWORK_ERROR: "pending"}
+
+
 def feedback_url_for(target: Path, local_body_code: str) -> str:
     db = open_queue(target, seed_summaries=False)
     try:

@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from gs_meetings.collect import add_request, open_queue, run_queue
-from gs_meetings.feedback import parse_feedback
+from gs_meetings.feedback import FORM_ABSENT, parse_feedback
 from gs_meetings.fetch import Client, atomic_json, read_capture
 from gs_meetings.meetings import parse_meetings, validate_meeting_rows
 from gs_meetings.source import EDITIONS
@@ -50,7 +50,7 @@ def seed_feedback(root: Path, *, meetings_root: Path):
     """Add newly completed dated listings without rereading already seeded reports."""
     if not (meetings_root / "collection.sqlite").is_file():
         raise ValueError("No dated meeting queue found")
-    db = open_queue(root, seed_summaries=False)
+    db = open_queue(root, seed_summaries=False, terminal_errors=(FORM_ABSENT,))
     db.execute("CREATE TABLE IF NOT EXISTS seeded_reports (url TEXT PRIMARY KEY)")
     db.execute(
         "CREATE TABLE IF NOT EXISTS feedback_links "
