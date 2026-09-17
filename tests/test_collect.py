@@ -101,11 +101,27 @@ def test_low_storage_stops_before_fetching_and_keeps_pending_work(
     assert Client.calls == []
 
 
-def queue_of(urls):
+class Clock:
+    """Stand in for `time` so that a sleep passes instantly and is recorded."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def queue_of(urls, archived=""):
     def initialize(root):
         db = module.open_queue(root, seed_summaries=False)
         for url in urls:
-            module.add_request(db, "current", "gp", {"url": url}, url=url)
+            edition = "PPC" if url in archived else "current"
+            module.add_request(db, edition, "gp", {"url": url}, url=url)
         db.commit()
         return db
 
@@ -167,8 +183,8 @@ def test_confirmed_misses_are_not_refetched_on_resume(tmp_path):
 
 
 def test_outage_is_waited_out_without_failing_the_queue(tmp_path, monkeypatch):
-    sleeps = []
-    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    clock = Clock()
+    monkeypatch.setattr(module, "time", clock)
     client = scripted_client(lambda _url, call: call <= 5)
     result = module.run_queue(
         tmp_path,
@@ -182,13 +198,13 @@ def test_outage_is_waited_out_without_failing_the_queue(tmp_path, monkeypatch):
     )
     assert result["errors"] == []
     assert set(statuses(tmp_path).values()) == {"done"}
-    assert sleeps == [60, 120, 240]
+    assert clock.sleeps == [60, 120, 240]
     assert client.calls[3:6] == ["d", "e", "f"]
 
 
 def test_a_failing_url_among_successes_is_not_an_outage(tmp_path, monkeypatch):
-    sleeps = []
-    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    clock = Clock()
+    monkeypatch.setattr(module, "time", clock)
     module.run_queue(
         tmp_path,
         1,
@@ -199,7 +215,7 @@ def test_a_failing_url_among_successes_is_not_an_outage(tmp_path, monkeypatch):
         client_factory=scripted_client(lambda url, _call: url in "ace"),
         outage_after=3,
     )
-    assert sleeps == []
+    assert clock.sleeps == []
     found = statuses(tmp_path)
     assert [url for url in found if found[url] == "error"] == ["a", "c", "e"]
 
@@ -207,8 +223,8 @@ def test_a_failing_url_among_successes_is_not_an_outage(tmp_path, monkeypatch):
 def test_an_outage_longer_than_the_limit_ends_with_recorded_errors(
     tmp_path, monkeypatch
 ):
-    sleeps = []
-    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    clock = Clock()
+    monkeypatch.setattr(module, "time", clock)
     result = module.run_queue(
         tmp_path,
         1,
@@ -220,5 +236,27 @@ def test_an_outage_longer_than_the_limit_ends_with_recorded_errors(
         outage_after=3,
         outage_limit=100,
     )
-    assert sleeps == [60, 120]
+    assert clock.sleeps == [60, 120]
     assert len(result["errors"]) == 6
+
+
+def test_an_archive_outage_does_not_hold_up_the_live_report(tmp_path, monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(module, "time", clock)
+    client = scripted_client(lambda url, _call: url in "abcd")
+    module.run_queue(
+        tmp_path,
+        1,
+        2,
+        None,
+        initialize=queue_of("abcdwxyz", archived="abcd"),
+        expand=lambda *_: None,
+        client_factory=client,
+        outage_after=3,
+        outage_limit=100,
+    )
+    assert client.calls[:7] == ["a", "b", "c", "w", "x", "y", "z"]
+    assert clock.sleeps == [60, 120]
+    found = statuses(tmp_path)
+    assert {found[url] for url in "wxyz"} == {"done"}
+    assert {found[url] for url in "abcd"} == {"error"}

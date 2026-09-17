@@ -6,7 +6,9 @@ import shutil
 import sqlite3
 import threading
 import time
+from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -188,6 +190,19 @@ def is_outage(exc: Exception) -> bool:
     return status is None or status == 429 or status >= 500
 
 
+@dataclass
+class Breaker:
+    """Outage state of one edition; archives and the live report fail separately."""
+
+    streak: list[str] = field(default_factory=list)
+    open: bool = False
+    probing: bool = False
+    given_up: bool = False
+    delay: int = 60
+    waited: float = 0.0
+    retry_at: float = 0.0
+
+
 def collect(
     root: Path, workers: int = 8, retries: int = 8, max_requests: int | None = None
 ) -> dict:
@@ -217,7 +232,9 @@ def run_queue(
     The outage breaker is written here instead of taken from tenacity, stamina or
     pybreaker: a per-request wait would park every worker for hours on the routes
     that always return 503, and a fail-fast breaker neither sleeps nor requeues.
-    Only the queue can tell one bad URL from a portal that answers nobody.
+    Only the queue can tell one bad URL from a portal that answers nobody. Each
+    edition has its own breaker because the archives have been down for hours while
+    the live report kept answering.
     """
     db = (initialize or open_queue)(root)
     expand = expand or children
@@ -237,9 +254,7 @@ def run_queue(
         return local.clients[task["edition"]].get(task["url"])[0]
 
     outage_after = outage_after or 3 * workers
-    streak: list[str] = []
-    outage = False
-    delay, waited = 60, 0.0
+    breakers: defaultdict[str, Breaker] = defaultdict(Breaker)
     submitted = finished = 0
     last_progress = float("-inf")
     storage_limited = False
@@ -253,23 +268,28 @@ def run_queue(
                 ):
                     storage_limited = True
                     LOG.error("Less than 2 GiB free; stopping new requests")
-                if outage and not pending and not storage_limited:
-                    LOG.warning("Portal outage: next probe in %s seconds", delay)
-                    time.sleep(delay)
-                    waited += delay
-                    delay = min(delay * 2, 1800)
                 while (
                     not storage_limited
-                    and len(pending) < (1 if outage else workers)
+                    and len(pending) < workers
                     and (max_requests is None or submitted < max_requests)
                 ):
+                    now = time.monotonic()
+                    blocked = [
+                        edition
+                        for edition, breaker in breakers.items()
+                        if breaker.open and (breaker.probing or now < breaker.retry_at)
+                    ]
                     task = db.execute(
-                        "SELECT * FROM requests WHERE status='pending' "
-                        "ORDER BY priority,attempts,url LIMIT 1"
+                        "SELECT * FROM requests WHERE status='pending' AND edition "
+                        "NOT IN (SELECT value FROM json_each(?)) "
+                        "ORDER BY priority,attempts,url LIMIT 1",
+                        (json.dumps(blocked),),
                     ).fetchone()
                     if task is None:
                         break
                     task = dict(task)
+                    task["probe"] = breakers[task["edition"]].open
+                    breakers[task["edition"]].probing = task["probe"]
                     db.execute(
                         "UPDATE requests SET status='running',attempts=attempts+1 "
                         "WHERE url=?",
@@ -279,7 +299,14 @@ def run_queue(
                     pending[pool.submit(fetch, task)] = task
                     submitted += 1
                 if not pending:
-                    break
+                    waiting = [b.retry_at for b in breakers.values() if b.open]
+                    spent = max_requests is not None and submitted >= max_requests
+                    if not waiting or storage_limited or spent:
+                        break
+                    pause = max(0.0, min(waiting) - time.monotonic())
+                    LOG.warning("Outage: next probe in %.0f seconds", pause)
+                    time.sleep(pause)
+                    continue
                 done, _ = wait(pending, timeout=30, return_when=FIRST_COMPLETED)
                 for future in done:
                     task = pending.pop(future)
@@ -303,24 +330,32 @@ def run_queue(
                         )
                         LOG.error("Failed %s: %s", task["url"], exc)
                         answered = not is_outage(exc)
+                    breaker = breakers[task["edition"]]
                     if answered:
-                        if outage:
-                            LOG.warning("Portal answered; resuming %s workers", workers)
-                        streak, outage, delay = [], False, 60
-                    elif waited >= outage_limit:
-                        if outage:
-                            LOG.error("Outage outlasted its limit; recording failures")
-                        outage = False
+                        if breaker.open:
+                            LOG.warning("%s answered; resuming", task["edition"])
+                        breakers[task["edition"]] = Breaker()
+                    elif breaker.given_up or breaker.waited >= outage_limit:
+                        if breaker.open:
+                            LOG.error("%s outage outlasted its limit", task["edition"])
+                        breaker.open, breaker.given_up = False, True
                     else:
-                        streak.append(task["url"])
-                        if outage or len(streak) >= outage_after:
-                            outage = True
+                        breaker.streak.append(task["url"])
+                        opening = (
+                            not breaker.open and len(breaker.streak) >= outage_after
+                        )
+                        if opening or task["probe"]:
+                            breaker.open, breaker.probing = True, False
+                            breaker.retry_at = time.monotonic() + breaker.delay
+                            breaker.waited += breaker.delay
+                            breaker.delay = min(breaker.delay * 2, 1800)
+                        if breaker.open:
                             # `attempts` stays spent, so each probe is a different URL.
                             db.executemany(
                                 "UPDATE requests SET status='pending' WHERE url=?",
-                                [(url,) for url in streak],
+                                [(url,) for url in breaker.streak],
                             )
-                            streak = []
+                            breaker.streak = []
                     db.commit()
                     finished += 1
                 if time.monotonic() - last_progress >= 30:
