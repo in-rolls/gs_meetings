@@ -49,8 +49,10 @@ def add_request(
     )
 
 
-def open_queue(root: Path, *, seed_summaries: bool = True) -> sqlite3.Connection:
-    """Open the checkpoint and recover requests interrupted by a previous run."""
+def open_queue(
+    root: Path, *, seed_summaries: bool = True, terminal_errors: tuple[str, ...] = ()
+) -> sqlite3.Connection:
+    """Requeue interrupted and failed requests; keep the source's confirmed misses."""
     root.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(root / "collection.sqlite")
     db.row_factory = sqlite3.Row
@@ -68,8 +70,17 @@ def open_queue(root: Path, *, seed_summaries: bool = True) -> sqlite3.Connection
         "CREATE TABLE IF NOT EXISTS coverage_gaps "
         "(url TEXT, raw_row TEXT, reason TEXT, PRIMARY KEY(url,raw_row,reason))"
     )
+    misses = (json.dumps(terminal_errors),)
     db.execute(
-        "UPDATE requests SET status='pending' WHERE status IN ('running','error')"
+        "UPDATE requests SET status='pending' WHERE status IN ('running','error') "
+        "AND (error IS NULL OR error NOT IN (SELECT value FROM json_each(?)))",
+        misses,
+    )
+    # Earlier versions requeued confirmed misses; they need no second request.
+    db.execute(
+        "UPDATE requests SET status='error' WHERE status!='done' "
+        "AND error IN (SELECT value FROM json_each(?))",
+        misses,
     )
     if seed_summaries:
         for edition in EDITIONS:
@@ -169,6 +180,14 @@ def progress(db: sqlite3.Connection, root: Path) -> dict:
     return result
 
 
+def is_outage(exc: Exception) -> bool:
+    """Separate an unreachable or overloaded portal from an answer about one URL."""
+    if not isinstance(exc, requests.RequestException):
+        return False
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status is None or status == 429 or status >= 500
+
+
 def collect(
     root: Path, workers: int = 8, retries: int = 8, max_requests: int | None = None
 ) -> dict:
@@ -190,8 +209,16 @@ def run_queue(
     initialize=None,
     expand=None,
     client_factory=None,
+    outage_after: int | None = None,
+    outage_limit: float = 24 * 3600,
 ) -> dict:
-    """Use one session per thread and edition; mutate the queue only in this thread."""
+    """Use one session per thread and edition; mutate the queue only in this thread.
+
+    The outage breaker is written here instead of taken from tenacity, stamina or
+    pybreaker: a per-request wait would park every worker for hours on the routes
+    that always return 503, and a fail-fast breaker neither sleeps nor requeues.
+    Only the queue can tell one bad URL from a portal that answers nobody.
+    """
     db = (initialize or open_queue)(root)
     expand = expand or children
     client_factory = client_factory or Client
@@ -209,8 +236,12 @@ def run_queue(
                 clients.append(client)
         return local.clients[task["edition"]].get(task["url"])[0]
 
+    outage_after = outage_after or 3 * workers
+    streak: list[str] = []
+    outage = False
+    delay, waited = 60, 0.0
     submitted = finished = 0
-    last_progress = 0.0
+    last_progress = float("-inf")
     storage_limited = False
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -222,9 +253,14 @@ def run_queue(
                 ):
                     storage_limited = True
                     LOG.error("Less than 2 GiB free; stopping new requests")
+                if outage and not pending and not storage_limited:
+                    LOG.warning("Portal outage: next probe in %s seconds", delay)
+                    time.sleep(delay)
+                    waited += delay
+                    delay = min(delay * 2, 1800)
                 while (
                     not storage_limited
-                    and len(pending) < workers
+                    and len(pending) < (1 if outage else workers)
                     and (max_requests is None or submitted < max_requests)
                 ):
                     task = db.execute(
@@ -258,6 +294,7 @@ def run_queue(
                             "WHERE url=?",
                             (len(rows), task["url"]),
                         )
+                        answered = True
                     except (requests.RequestException, ValueError) as exc:
                         db.rollback()
                         db.execute(
@@ -265,6 +302,25 @@ def run_queue(
                             (str(exc), task["url"]),
                         )
                         LOG.error("Failed %s: %s", task["url"], exc)
+                        answered = not is_outage(exc)
+                    if answered:
+                        if outage:
+                            LOG.warning("Portal answered; resuming %s workers", workers)
+                        streak, outage, delay = [], False, 60
+                    elif waited >= outage_limit:
+                        if outage:
+                            LOG.error("Outage outlasted its limit; recording failures")
+                        outage = False
+                    else:
+                        streak.append(task["url"])
+                        if outage or len(streak) >= outage_after:
+                            outage = True
+                            # `attempts` stays spent, so each probe is a different URL.
+                            db.executemany(
+                                "UPDATE requests SET status='pending' WHERE url=?",
+                                [(url,) for url in streak],
+                            )
+                            streak = []
                     db.commit()
                     finished += 1
                 if time.monotonic() - last_progress >= 30:

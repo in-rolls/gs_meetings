@@ -1,6 +1,8 @@
 """Test national enumeration, failure recovery and scope preservation."""
 
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -97,3 +99,126 @@ def test_low_storage_stops_before_fetching_and_keeps_pending_work(
     assert report["storage_limited"] is True
     assert all(group["status"] == "pending" for group in report["groups"])
     assert Client.calls == []
+
+
+def queue_of(urls):
+    def initialize(root):
+        db = module.open_queue(root, seed_summaries=False)
+        for url in urls:
+            module.add_request(db, "current", "gp", {"url": url}, url=url)
+        db.commit()
+        return db
+
+    return initialize
+
+
+def unavailable():
+    return requests.HTTPError("503", response=SimpleNamespace(status_code=503))
+
+
+def scripted_client(fails):
+    """Build a client whose `fails(url, call_number)` decides each 503."""
+
+    class Scripted:
+        calls: ClassVar[list] = []
+
+        def __init__(self, root, edition, retries):
+            pass
+
+        def get(self, url):
+            self.calls.append(url)
+            if fails(url, len(self.calls)):
+                raise unavailable()
+            return [{}], None
+
+        def close(self):
+            pass
+
+    return Scripted
+
+
+def statuses(root):
+    with closing(sqlite3.connect(root / "collection.sqlite")) as db:
+        return dict(db.execute("SELECT url,status FROM requests"))
+
+
+def test_confirmed_misses_are_not_refetched_on_resume(tmp_path):
+    db = queue_of("abcd")(tmp_path)
+    for url, status, error in [
+        ("a", "error", "absent"),
+        ("b", "pending", "absent"),
+        ("c", "error", "503"),
+        ("d", "running", None),
+    ]:
+        db.execute(
+            "UPDATE requests SET status=?,error=? WHERE url=?", (status, error, url)
+        )
+    db.commit()
+    db.close()
+    module.open_queue(
+        tmp_path, seed_summaries=False, terminal_errors=("absent",)
+    ).close()
+    assert statuses(tmp_path) == {
+        "a": "error",
+        "b": "error",
+        "c": "pending",
+        "d": "pending",
+    }
+
+
+def test_outage_is_waited_out_without_failing_the_queue(tmp_path, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    client = scripted_client(lambda _url, call: call <= 5)
+    result = module.run_queue(
+        tmp_path,
+        1,
+        2,
+        None,
+        initialize=queue_of("abcdef"),
+        expand=lambda *_: None,
+        client_factory=client,
+        outage_after=3,
+    )
+    assert result["errors"] == []
+    assert set(statuses(tmp_path).values()) == {"done"}
+    assert sleeps == [60, 120, 240]
+    assert client.calls[3:6] == ["d", "e", "f"]
+
+
+def test_a_failing_url_among_successes_is_not_an_outage(tmp_path, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    module.run_queue(
+        tmp_path,
+        1,
+        2,
+        None,
+        initialize=queue_of("abcdef"),
+        expand=lambda *_: None,
+        client_factory=scripted_client(lambda url, _call: url in "ace"),
+        outage_after=3,
+    )
+    assert sleeps == []
+    found = statuses(tmp_path)
+    assert [url for url in found if found[url] == "error"] == ["a", "c", "e"]
+
+
+def test_an_outage_longer_than_the_limit_ends_with_recorded_errors(
+    tmp_path, monkeypatch
+):
+    sleeps = []
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    result = module.run_queue(
+        tmp_path,
+        1,
+        2,
+        None,
+        initialize=queue_of("abcdef"),
+        expand=lambda *_: None,
+        client_factory=scripted_client(lambda *_: True),
+        outage_after=3,
+        outage_limit=100,
+    )
+    assert sleeps == [60, 120]
+    assert len(result["errors"]) == 6

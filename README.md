@@ -211,7 +211,20 @@ captures are retried; HTTP errors and HTML error pages never become empty data.
 National collection uses 16 workers, with one session per thread and edition.
 Eight retries are the national default, with exponential backoff and server
 `Retry-After` handling for throttling and temporary server errors.
-Use `--retries 20` for a collection that should wait through a longer outage.
+
+Those retries cover one URL for seconds. The portal has also gone down for hours,
+with its load balancer answering every request `503 No available server`; at 16
+workers that turns a whole queue into failures within minutes. The queue therefore
+watches for consecutive connection or 5xx failures with no answer in between. After
+three times the worker count it returns those requests to the queue, stops the
+workers, and probes with one request after 60 seconds, doubling to 30 minutes. The
+first answer of any kind resumes collection. After 24 hours of waiting it gives up
+and records failures as before. A few routes return 503 permanently; if only those
+remain, a run waits out that limit once before finishing.
+
+A facilitator link whose page has no form is a confirmed miss, not a failure. It is
+kept as `form_absent` and not requested again on resume; about one request in six
+is of this kind, and retrying them cost more requests than the remaining work.
 TLS verification remains enabled. Use a new output directory for a fresh snapshot:
 resume deliberately retains the first successful response for each URL.
 
