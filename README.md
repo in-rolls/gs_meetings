@@ -14,8 +14,12 @@ and coverage limits below.
 
 The summary snapshot captured on 2026-09-11 contains **1,242,582 GP-by-edition records** from the
 live report and four archives. It includes explicit source coverage gaps.
-The dated collection contains **2,424,299 listing rows**. These are source entries,
-not a deduplicated count of meetings. Both stages' tables are on Zenodo at
+The dated collection contains **2,424,390 listing rows**. These are source entries,
+not a deduplicated count of meetings. They link to **1,990,571 facilitator
+reports**; another 415,366 listed meetings have no report form on the portal.
+One report in 17,000 gives an impossible attendance: 114 exceed 50,000, 111 of
+them in `PPC2018`, up to 995,084,503. They are kept as published. All three
+stages' tables are on Zenodo at
 [doi:10.5281/zenodo.22772026](https://doi.org/10.5281/zenodo.22772026) (25 files,
 341 MB, CC0; the concept DOI resolves to the newest version). Output stays
 under `data/`.
@@ -134,9 +138,9 @@ The national download contains these observed date ranges:
 | Current, 2022–2023 | 276,084 | 2022-10-02 | 2023-09-29 |
 | Current, 2023–2024 | 268,973 | 2023-06-13 | 2024-10-10 |
 | Current, 2024–2025 | 296,041 | 2024-10-01 | 2025-07-30 |
-| Current, 2025–2026 | 346,120 | 2024-08-14 | 2026-09-11 |
+| Current, 2025–2026 | 346,211 | 2024-08-14 | 2026-09-16 |
 
-**149,726 rows fall outside April–March of the requested financial year.** Their
+**149,811 rows fall outside April–March of the requested financial year.** Their
 returned dates are preserved and flagged. The report selector is not a reliable
 substitute for the actual date; these ranges also do not establish continuous
 coverage between the earliest and latest observations.
