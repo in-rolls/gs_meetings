@@ -14,12 +14,21 @@ and coverage limits below.
 
 The summary snapshot captured on 2026-09-11 contains **1,242,582 GP-by-edition records** from the
 live report and four archives. It includes explicit source coverage gaps.
-The dated collection contains **2,424,299 listing rows**. These are source entries,
-not a deduplicated count of meetings. Both stages' tables are on Zenodo at
+The dated collection contains **2,424,390 listing rows**. These are source entries,
+not a deduplicated count of meetings. They link to **1,990,571 facilitator
+reports**; another 415,366 listed meetings have no report form on the portal.
+One report in 17,000 gives an impossible attendance: 114 exceed 50,000, 111 of
+them in `PPC2018`, up to 995,084,503. They are kept as published. All three
+stages' tables are on Zenodo at
 [doi:10.5281/zenodo.22772026](https://doi.org/10.5281/zenodo.22772026) (25 files,
-341 MB, CC0; the concept DOI resolves to the newest version). Individual
-facilitator reports are still downloading and will be added as a new version of
-the record. Output stays under `data/`.
+341 MB, CC0; the concept DOI resolves to the newest version). Output stays
+under `data/`.
+
+**Known gap.** 18,453 facilitator reports (0.8%) could not be fetched: 18,434 in
+the `PPC` (2021–22) archive and 19 in `PPC2019`. The portal has returned HTTP 503
+for those archives since 2026-09-16. They are marked `fetch_error` in
+`feedback_links.parquet` and listed under `source_errors` in
+`feedback/tables/manifest.json`. A later version will add them.
 
 | Summary edition | GP/TLB records |
 |---|---:|
@@ -129,9 +138,9 @@ The national download contains these observed date ranges:
 | Current, 2022–2023 | 276,084 | 2022-10-02 | 2023-09-29 |
 | Current, 2023–2024 | 268,973 | 2023-06-13 | 2024-10-10 |
 | Current, 2024–2025 | 296,041 | 2024-10-01 | 2025-07-30 |
-| Current, 2025–2026 | 346,120 | 2024-08-14 | 2026-09-11 |
+| Current, 2025–2026 | 346,211 | 2024-08-14 | 2026-09-16 |
 
-**149,726 rows fall outside April–March of the requested financial year.** Their
+**149,811 rows fall outside April–March of the requested financial year.** Their
 returned dates are preserved and flagged. The report selector is not a reliable
 substitute for the actual date; these ranges also do not establish continuous
 coverage between the earliest and latest observations.
@@ -153,8 +162,10 @@ coverage between the earliest and latest observations.
   occurred. Empty arrays are saved but reported as coverage requiring investigation.
 - Many listed meetings have no facilitator report. The report URL returns the
   portal's own "500 Internal Server Error" page with HTTP status 200 and no form.
-  Re-fetching returns the same page, so this is a property of the meeting rather
-  than a transient failure; the cause on the portal side is unknown. The rate
+  For closed campaigns this is stable: none of 1,340 rechecked 2022–2024 meetings
+  had gained a form. For the live campaign it means "not filed as of
+  `fetched_at`": 3% of absent 2025–26 forms appeared within days, so those were
+  requested again before export. The rate
   varies sharply by state: in the 2026-09 collection about 42% of Maharashtra's
   listed current-edition meetings had no report, against about 1% in Uttar
   Pradesh. Compare rates within state and year before reading a missing report as
@@ -215,13 +226,14 @@ Eight retries are the national default, with exponential backoff and server
 Those retries cover one URL for seconds. The portal has also gone down for hours,
 with its load balancer answering every request `503 No available server`; at 16
 workers that turns a whole queue into failures within minutes. The queue therefore
-watches for consecutive connection or 5xx failures with no answer in between. After
-three times the worker count it returns those requests to the queue, stops the
-workers, and probes with one request after 60 seconds, doubling to 30 minutes. The
-first answer of any kind resumes collection. Each edition is watched separately,
-because the archives have been down while the live report kept answering. After 24 hours of waiting it gives up
-and records failures as before. A few routes return 503 permanently; if only those
-remain, a run waits out that limit once before finishing.
+watches each edition for consecutive connection or 5xx failures with no answer
+in between, because the archives have been down while the live report kept
+answering. After three times the worker count it returns those requests to the
+queue, pauses that edition, and probes it with one request after 60 seconds,
+doubling to 30 minutes. The first answer of any kind resumes it. After 24 hours
+of waiting it gives up and records failures as before; `collect-feedback
+--outage-limit 0` records them at once. A few routes return 503 permanently; if
+only those remain, a run waits out that limit once before finishing.
 
 A facilitator link whose page has no form is a confirmed miss, not a failure. It is
 kept as `form_absent` and not requested again on resume; about one request in six
@@ -390,7 +402,9 @@ uv run pre-commit run --all-files
 Cite the Ministry of Panchayati Raj's report URL, edition and capture date for the
 data, and [CITATION.cff](CITATION.cff) for this software. Cite the tables by the
 concept DOI [10.5281/zenodo.22772026](https://doi.org/10.5281/zenodo.22772026),
-which resolves to the newest version; the version published on 2026-09-16 is
+which resolves to the newest version. Version 0.4.0, with the facilitator reports,
+is [10.5281/zenodo.22832523](https://doi.org/10.5281/zenodo.22832523); the
+2026-09-16 version without them is
 [10.5281/zenodo.22772027](https://doi.org/10.5281/zenodo.22772027).
 The original source notes remain available at commit
 [`3d95a90`](https://github.com/in-rolls/gs_meetings/tree/3d95a90).

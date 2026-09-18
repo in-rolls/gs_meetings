@@ -497,3 +497,15 @@ def test_date_link_uses_parsed_dates_and_leaves_invalid_values_unmatched():
     assert matching_date("1-12-2021", "01-12-2021") is True
     assert matching_date("01-12-2021", "02-12-2021") is False
     assert matching_date("31-02-2021", "28-02-2021") is None
+
+
+def test_na_names_and_cross_icons_are_kept_as_shown():
+    record = parse_feedback((FIXTURES / "feedback_ppc.html").read_text())[0]
+    rows = [row["cells"] for row in json.loads(record["tables"])]
+    unstaffed = [cells for cells in rows if cells[1]["text"] == "N/A"]
+    assert unstaffed
+    assert all(
+        cell["text"] is None and cell["boolean"] is False
+        for cells in unstaffed
+        for cell in cells[2:]
+    )

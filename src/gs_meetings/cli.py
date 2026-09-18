@@ -67,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--workers", type=positive, default=4)
     command.add_argument("--retries", type=positive, default=2)
     command.add_argument("--max-requests", type=positive)
+    command.add_argument(
+        "--outage-limit",
+        type=float,
+        default=24 * 3600,
+        help="Seconds to wait for an unreachable edition; 0 records failures at once",
+    )
     command = commands.add_parser(
         "collect-images",
         help="Download report photos; --dry-run queues and projects without fetching",
@@ -175,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.workers,
                 args.retries,
                 args.max_requests,
+                outage_limit=args.outage_limit,
             )
             return int(any(group["status"] != "done" for group in report["groups"]))
         if args.command == "export-meetings":

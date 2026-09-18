@@ -2,10 +2,14 @@
 
 import hashlib
 import json
+import logging
+import os
 import sqlite3
 from collections import Counter
 from contextlib import ExitStack, closing
 from datetime import date, datetime
+from functools import partial
+from multiprocessing import Pool
 from pathlib import Path
 
 import pyarrow as pa
@@ -19,6 +23,7 @@ from gs_meetings.feedback import (
 )
 from gs_meetings.fetch import atomic_json, read_capture
 
+LOG = logging.getLogger(__name__)
 GP_YEAR = ["edition", "financial_year", "state_code", "report_scope", "local_body_code"]
 COVERAGE_COUNTS = [
     "listed_meetings",
@@ -108,7 +113,7 @@ SCHEMAS = {
 
 
 def outcome(status: str | None, error: str | None) -> str:
-    """Separate the portal's stable no-form response from transport failures."""
+    """Separate the portal's no-form response from transport failures."""
     if status is None:
         return "not_requested"
     if status == "done":
@@ -230,6 +235,17 @@ def export_feedback(root: Path, *, allow_source_errors: bool = False) -> dict:
         return write_feedback(db, root, source_groups)
 
 
+def load_report(root: Path, task: dict) -> tuple[dict, dict | None]:
+    """Read and parse one capture; runs in a worker process."""
+    if task["status"] != "done":
+        return task, None
+    key = hashlib.sha256(task["url"].encode()).hexdigest()
+    capture = read_capture(
+        root / "raw" / task["edition"] / f"{key}.jsonl.gz", parser=parse_feedback
+    )
+    return task, capture
+
+
 def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> dict:
     """Stream reports, question answers, table cells and validated join edges."""
     output = root / "tables"
@@ -253,7 +269,16 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
     reported_urls: dict[tuple, set] = {}
     unfilled_urls: dict[tuple, set] = {}
     errors = []
+    tasks = [
+        dict(row)
+        for row in db.execute(
+            "SELECT url,edition,status,error,rows,context FROM requests ORDER BY url"
+        )
+    ]
+    # Parsing two million reports takes about 15 hours in one process; the
+    # ordered map keeps output order, and so the checksums, unchanged.
     with ExitStack() as stack:
+        pool = stack.enter_context(Pool(min(os.cpu_count() or 1, 8)))
         writers = {
             name: stack.enter_context(
                 pq.ParquetWriter(
@@ -272,16 +297,15 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
                 )
                 buffers[name].clear()
 
-        for task in db.execute("SELECT * FROM requests ORDER BY url"):
+        for done, (task, capture) in enumerate(
+            pool.imap(partial(load_report, root), tasks, chunksize=256), start=1
+        ):
+            if done % 100000 == 0:
+                LOG.info("Read %s of %s feedback requests", done, len(tasks))
             if task["status"] == "error":
                 if task["error"] != FORM_ABSENT:
                     errors.append({"url": task["url"], "error": task["error"]})
                 continue
-            key = hashlib.sha256(task["url"].encode()).hexdigest()
-            capture = read_capture(
-                root / "raw" / task["edition"] / f"{key}.jsonl.gz",
-                parser=parse_feedback,
-            )
             if (
                 capture is None
                 or capture["url"] != task["url"]
@@ -414,8 +438,9 @@ def write_feedback(db: sqlite3.Connection, root: Path, source_groups: dict) -> d
         "link_key": ["meeting_url", "row_ordinal"],
         "coverage_key": GP_YEAR,
         "outcome_rule": (
-            "form_absent is the portal's stable no-form response for a listed "
-            "meeting; fetch_error is a transport failure; not_requested is a "
+            "form_absent is the portal's no-form response for a listed meeting "
+            "as of fetched_at; recent live-campaign meetings can gain a form later; "
+            "fetch_error is a transport failure; not_requested is a "
             "listing row without a usable date"
         ),
         "join_rule": (

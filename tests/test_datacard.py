@@ -56,7 +56,7 @@ def test_data_card_reports_every_stage_from_its_manifest(tmp_path):
             "outcomes_by_edition": {"current": {"report": 2, "form_absent": 1}},
             "forms_absent_by_state": {"27": 1},
             "source_errors": [{"url": "u", "error": "timeout"}],
-            "outcome_rule": "form_absent is the portal's stable no-form response",
+            "outcome_rule": "form_absent is the portal's no-form response",
         },
         {"feedback": 2, "feedback_links": 4, "feedback_coverage": 3},
     )
@@ -81,7 +81,7 @@ def test_data_card_reports_every_stage_from_its_manifest(tmp_path):
     assert "1 source errors" in card
     assert "2 empty responses" in card
     assert "Source-reported aggregates" in card
-    assert "stable no-form response" in card
+    assert "no-form response" in card
 
 
 def test_data_card_names_missing_stages(tmp_path):

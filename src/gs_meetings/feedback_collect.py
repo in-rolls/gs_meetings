@@ -127,7 +127,12 @@ def no_children(_db, _task, _rows) -> None:
 
 
 def collect_feedback(
-    root: Path, meetings_root: Path, workers=4, retries=2, max_requests=None
+    root: Path,
+    meetings_root: Path,
+    workers=4,
+    retries=2,
+    max_requests=None,
+    outage_limit: float = 24 * 3600,
 ) -> dict:
     """Collect newly discovered feedback; rerun after dated collection finishes."""
     root.mkdir(parents=True, exist_ok=True)
@@ -141,4 +146,5 @@ def collect_feedback(
             initialize=partial(seed_feedback, meetings_root=meetings_root),
             expand=no_children,
             client_factory=partial(Client, parser=parse_feedback),
+            outage_limit=outage_limit,
         )
