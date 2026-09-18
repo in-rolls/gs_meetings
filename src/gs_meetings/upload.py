@@ -60,7 +60,9 @@ def metadata(version: str) -> dict:
             "meeting listings, and individual facilitator reports with their "
             "links to the listings. Each stage ships a manifest, a schema and "
             "checksums. Counts are administrative reports as published by the "
-            "portal, not verified attendance.</p>"
+            "portal, not verified attendance. Requests the portal did not answer "
+            "are listed under source_errors in each manifest and counted in "
+            "README_DATA.md.</p>"
             f"<p>Collected with <a href='{REPOSITORY}'>gs_meetings</a> "
             f"{version}; see SCHEMA.md for row units, keys and caveats.</p>"
         ),

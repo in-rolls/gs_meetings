@@ -17,9 +17,14 @@ live report and four archives. It includes explicit source coverage gaps.
 The dated collection contains **2,424,299 listing rows**. These are source entries,
 not a deduplicated count of meetings. Both stages' tables are on Zenodo at
 [doi:10.5281/zenodo.22772026](https://doi.org/10.5281/zenodo.22772026) (25 files,
-341 MB, CC0; the concept DOI resolves to the newest version). Individual
-facilitator reports are still downloading and will be added as a new version of
-the record. Output stays under `data/`.
+341 MB, CC0; the concept DOI resolves to the newest version). Output stays
+under `data/`.
+
+**Known gap.** 18,453 facilitator reports (0.8%) could not be fetched: 18,434 in
+the `PPC` (2021–22) archive and 19 in `PPC2019`. The portal has returned HTTP 503
+for those archives since 2026-09-16. They are marked `fetch_error` in
+`feedback_links.parquet` and listed under `source_errors` in
+`feedback/tables/manifest.json`. A later version will add them.
 
 | Summary edition | GP/TLB records |
 |---|---:|
@@ -153,8 +158,10 @@ coverage between the earliest and latest observations.
   occurred. Empty arrays are saved but reported as coverage requiring investigation.
 - Many listed meetings have no facilitator report. The report URL returns the
   portal's own "500 Internal Server Error" page with HTTP status 200 and no form.
-  Re-fetching returns the same page, so this is a property of the meeting rather
-  than a transient failure; the cause on the portal side is unknown. The rate
+  For closed campaigns this is stable: none of 1,340 rechecked 2022–2024 meetings
+  had gained a form. For the live campaign it means "not filed as of
+  `fetched_at`": 3% of absent 2025–26 forms appeared within days, so those were
+  requested again before export. The rate
   varies sharply by state: in the 2026-09 collection about 42% of Maharashtra's
   listed current-edition meetings had no report, against about 1% in Uttar
   Pradesh. Compare rates within state and year before reading a missing report as
