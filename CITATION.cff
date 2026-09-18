@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "Please cite this software and the official report URL and capture date."
 type: software
-version: "0.3.1"
-date-released: 2026-09-16
+version: "0.4.0"
+date-released: 2026-09-18
 title: "Gram Sabha participation reports"
 authors:
   - family-names: Sood
@@ -17,6 +17,9 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.22772027"
     description: "Version published 2026-09-16: national summaries and dated meetings."
+  - type: doi
+    value: "10.5281/zenodo.22832523"
+    description: "Version 0.4.0: adds facilitator reports and their links to the listings."
 license: MIT
 keywords:
   - India

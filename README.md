@@ -402,7 +402,9 @@ uv run pre-commit run --all-files
 Cite the Ministry of Panchayati Raj's report URL, edition and capture date for the
 data, and [CITATION.cff](CITATION.cff) for this software. Cite the tables by the
 concept DOI [10.5281/zenodo.22772026](https://doi.org/10.5281/zenodo.22772026),
-which resolves to the newest version; the version published on 2026-09-16 is
+which resolves to the newest version. Version 0.4.0, with the facilitator reports,
+is [10.5281/zenodo.22832523](https://doi.org/10.5281/zenodo.22832523); the
+2026-09-16 version without them is
 [10.5281/zenodo.22772027](https://doi.org/10.5281/zenodo.22772027).
 The original source notes remain available at commit
 [`3d95a90`](https://github.com/in-rolls/gs_meetings/tree/3d95a90).
