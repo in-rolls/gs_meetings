@@ -240,6 +240,24 @@ def test_an_outage_longer_than_the_limit_ends_with_recorded_errors(
     assert len(result["errors"]) == 6
 
 
+def test_a_zero_outage_limit_records_failures_without_waiting(tmp_path, monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(module, "time", clock)
+    result = module.run_queue(
+        tmp_path,
+        1,
+        2,
+        None,
+        initialize=queue_of("abcdef"),
+        expand=lambda *_: None,
+        client_factory=scripted_client(lambda *_: True),
+        outage_after=3,
+        outage_limit=0,
+    )
+    assert clock.sleeps == []
+    assert len(result["errors"]) == 6
+
+
 def test_an_archive_outage_does_not_hold_up_the_live_report(tmp_path, monkeypatch):
     clock = Clock()
     monkeypatch.setattr(module, "time", clock)

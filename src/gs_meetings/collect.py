@@ -69,6 +69,10 @@ def open_queue(
         "ON requests(status,priority,attempts,url)"
     )
     db.execute(
+        "CREATE INDEX IF NOT EXISTS requests_groups "
+        "ON requests(edition,level,status,rows)"
+    )
+    db.execute(
         "CREATE TABLE IF NOT EXISTS coverage_gaps "
         "(url TEXT, raw_row TEXT, reason TEXT, PRIMARY KEY(url,raw_row,reason))"
     )
@@ -156,8 +160,12 @@ def children(db: sqlite3.Connection, task: dict, rows: list[dict]) -> None:
             )
 
 
-def progress(db: sqlite3.Connection, root: Path) -> dict:
-    """Write completion counts and retained failures for monitoring and handoff."""
+def progress(db: sqlite3.Connection, root: Path, *, final: bool = False) -> dict:
+    """Write completion counts and, when a run ends, its retained failures.
+
+    Periodic writes use only the indexed counts: listing 400,000 confirmed misses
+    every 30 seconds once starved the queue to two requests a minute.
+    """
     groups = [
         dict(row)
         for row in db.execute(
@@ -166,18 +174,27 @@ def progress(db: sqlite3.Connection, root: Path) -> dict:
             "ORDER BY edition,priority,status"
         )
     ]
-    errors = [
-        dict(row)
-        for row in db.execute(
-            "SELECT edition,url,error FROM requests WHERE status='error'"
-        )
-    ]
     result = {
         "updated_at": datetime.now(UTC).isoformat(),
         "groups": groups,
-        "errors": errors,
         "display_excluded_states": [4, 7],
     }
+    if final:
+        # Messages end with the URL; count them without it, and list at most 10,000.
+        result["error_counts"] = dict(
+            db.execute(
+                "SELECT CASE WHEN instr(error,' for url: ') > 0 "
+                "THEN substr(error,1,instr(error,' for url: ')-1) ELSE error END, "
+                "COUNT(*) FROM requests WHERE status='error' GROUP BY 1 ORDER BY 2 DESC"
+            )
+        )
+        result["errors"] = [
+            dict(row)
+            for row in db.execute(
+                "SELECT edition,url,error FROM requests WHERE status='error' "
+                "ORDER BY url LIMIT 10000"
+            )
+        ]
     atomic_json(root / "collection-progress.json", result)
     return result
 
@@ -363,7 +380,7 @@ def run_queue(
                     last_progress = time.monotonic()
                 if finished and finished % 100 == 0:
                     LOG.info("Completed %s requests in this invocation", finished)
-        result = progress(db, root)
+        result = progress(db, root, final=True)
         result["storage_limited"] = storage_limited
         atomic_json(root / "collection-progress.json", result)
         return result
