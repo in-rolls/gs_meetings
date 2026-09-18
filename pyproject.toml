@@ -15,6 +15,7 @@ dependencies = [
     "pyarrow>=21",
     "beautifulsoup4>=4.13",
     "pillow>=12.3",
+    "lxml>=6",
 ]
 
 [project.urls]
