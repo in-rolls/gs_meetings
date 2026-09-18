@@ -1,6 +1,6 @@
 [project]
 name = "gs-meetings"
-version = "0.3.1"
+version = "0.4.0"
 description = "Collect and parse official Gram Sabha participation reports"
 readme = "README.md"
 requires-python = ">=3.12"

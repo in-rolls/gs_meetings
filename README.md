@@ -222,13 +222,14 @@ Eight retries are the national default, with exponential backoff and server
 Those retries cover one URL for seconds. The portal has also gone down for hours,
 with its load balancer answering every request `503 No available server`; at 16
 workers that turns a whole queue into failures within minutes. The queue therefore
-watches for consecutive connection or 5xx failures with no answer in between. After
-three times the worker count it returns those requests to the queue, stops the
-workers, and probes with one request after 60 seconds, doubling to 30 minutes. The
-first answer of any kind resumes collection. Each edition is watched separately,
-because the archives have been down while the live report kept answering. After 24 hours of waiting it gives up
-and records failures as before. A few routes return 503 permanently; if only those
-remain, a run waits out that limit once before finishing.
+watches each edition for consecutive connection or 5xx failures with no answer
+in between, because the archives have been down while the live report kept
+answering. After three times the worker count it returns those requests to the
+queue, pauses that edition, and probes it with one request after 60 seconds,
+doubling to 30 minutes. The first answer of any kind resumes it. After 24 hours
+of waiting it gives up and records failures as before; `collect-feedback
+--outage-limit 0` records them at once. A few routes return 503 permanently; if
+only those remain, a run waits out that limit once before finishing.
 
 A facilitator link whose page has no form is a confirmed miss, not a failure. It is
 kept as `form_absent` and not requested again on resume; about one request in six
