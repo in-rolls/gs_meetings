@@ -1,6 +1,5 @@
 # Gram Sabha participation reports
 
-[![CI](https://github.com/in-rolls/gs_meetings/actions/workflows/ci.yml/badge.svg)](https://github.com/in-rolls/gs_meetings/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/in-rolls/gs_meetings)](https://github.com/in-rolls/gs_meetings/releases)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22772026.svg)](https://doi.org/10.5281/zenodo.22772026)
 
@@ -393,8 +392,6 @@ only saved files and does not access the network.
 
 ```sh
 make ci
-make ci-docker
-uv run pre-commit run --all-files
 ```
 
 ## Citation
@@ -413,3 +410,7 @@ The original source notes remain available at commit
 
 The code is available under the [MIT License](LICENSE). Government responses retain
 their source attribution; the code license does not assign a license to those records.
+
+## Maintenance
+
+This is a point-in-time data collection; see the [shared maintenance policy](https://github.com/soodoku/data-repos#maintenance-policy). Run the affected parser tests when code changes and the relevant data validators when inputs or outputs change. Full-data checks and publication are explicit operations. Routine edits do not require hosted CI, Docker, a Python-version matrix, Preen or pre-commit.
