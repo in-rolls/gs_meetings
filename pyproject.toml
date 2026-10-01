@@ -34,7 +34,6 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "ruff>=0.14",
-    "pre-commit>=4",
     { include-group = "test" },
 ]
 test = ["pytest>=8"]
