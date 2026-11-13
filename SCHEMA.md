@@ -115,7 +115,7 @@ report, whereas similarly named fields in the summary data are aggregate counts.
 Missing fields remain null; an absent checkbox or answer is not a reported no.
 The archive editions (`PPC`, `PPC2018`, `PPC2019`) show the GPDP discussion
 questions as unlabelled text beside a yes/no icon; the parser reads them like the
-labelled questions on the current portal. Questions an edition does not ask,
+labeled questions on the current portal. Questions an edition does not ask,
 such as quorum and Mahila/Bal Sabha in the archives, stay null.
 For HTML answers, whitespace is collapsed and blank text becomes null. Multi-line
 answers such as the Sankalp focus areas and SDGs keep one item per line. Comma
@@ -124,7 +124,7 @@ separators are removed before parsing attendance counts; the raw HTML is retaine
 `src` (for example `file/image/810091`) and displayed caption; the photos
 themselves are not downloaded.
 
-`feedback_answers.parquet` preserves every labelled question and its text or
+`feedback_answers.parquet` preserves every labeled question and its text or
 boolean response. Its key is (`source_url`, `answer_ordinal`). Question wording
 can vary with edition, year and local-body category. `feedback_tables.parquet`
 preserves headers and ordered cells as Arrow lists/structs; its key is
